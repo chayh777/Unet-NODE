@@ -1,0 +1,49 @@
+seed: 42  # controls global randomness (shuffling/augmentation) while eval_split.csv governs the fixed split
+
+paths:
+  isic_images_dir: data/isic2018/images
+  isic_masks_dir: data/isic2018/masks
+  artifacts_dir: artifacts
+
+dataset:
+  image_size: 256
+  class_values:
+    background: 0
+    lesion: 1
+  eval_split_csv: data/isic2018/eval_split.csv
+
+model:
+  encoder_name: resnet34
+  encoder_weights: imagenet
+  in_channels: 3
+  num_classes: 2
+  bottleneck_channels: 1024
+
+training:
+  batch_size: 8
+  learning_rate: 0.0001
+  epochs: 20
+  num_workers: 0
+  pretrained_checkpoint_name: pretrained_encoder_unet.pt
+  finetuned_checkpoint_name: finetuned_unet.pt
+
+extraction:
+  batch_size: 8
+  include_classes:
+    - lesion
+    - background
+  primary_class: lesion
+  min_mask_pixels: 16
+
+reduction:
+  pca_components: 30
+  umap_neighbors: 20
+  umap_min_dist: 0.1
+  random_state: 42  # ensures the PCA + UMAP reduction steps are repeatable
+
+plotting:
+  alpha: 0.7
+  point_size: 20
+  dpi: 220
+  lesion_color: "#d84b4b"
+  background_color: "#4f83cc"

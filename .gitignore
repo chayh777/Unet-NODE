@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+
+# Test and tooling cache
+.pytest_cache/
+.matplotlib/
+
+# Experiment outputs
+artifacts/
+smoke_run/
+
+# Local datasets
+data/isic2018/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
