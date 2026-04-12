@@ -25,17 +25,26 @@ class ISIC2018Dataset(Dataset):
             )
         self.image_paths = sorted(self.images_dir.glob("*.jpg"))
 
+    def _resolve_mask_path(self, sample_id: str) -> Path:
+        candidates = [
+            self.masks_dir / f"{sample_id}.png",
+            self.masks_dir / f"{sample_id}_segmentation.png",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(
+            f"Missing mask for sample {sample_id}. Checked: "
+            + ", ".join(str(path) for path in candidates)
+        )
+
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, index):
         image_path = self.image_paths[index]
         sample_id = image_path.stem
-        mask_path = self.masks_dir / f"{sample_id}.png"
-        if not mask_path.exists():
-            raise FileNotFoundError(
-                f"Missing mask for sample {sample_id} at {mask_path}"
-            )
+        mask_path = self._resolve_mask_path(sample_id)
 
         with Image.open(image_path) as image_file:
             image = (

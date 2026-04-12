@@ -83,6 +83,31 @@ def test_isic_dataset_missing_mask(tmp_path: Path):
         _ = dataset[0]
 
 
+def test_isic_dataset_supports_segmentation_suffix(tmp_path: Path):
+    images_dir = tmp_path / "images"
+    masks_dir = tmp_path / "masks"
+    images_dir.mkdir()
+    masks_dir.mkdir()
+
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    mask = np.zeros((8, 8), dtype=np.uint8)
+    mask[1:4, 1:4] = 255
+
+    Image.fromarray(image).save(images_dir / "ISIC_0004.jpg")
+    Image.fromarray(mask).save(masks_dir / "ISIC_0004_segmentation.png")
+
+    dataset = ISIC2018Dataset(
+        images_dir=images_dir,
+        masks_dir=masks_dir,
+        image_size=8,
+        class_values={"background": 0, "lesion": 1},
+    )
+
+    sample = dataset[0]
+    assert sample["sample_id"] == "ISIC_0004"
+    assert sample["class_presence"]["lesion"] is True
+
+
 @pytest.mark.parametrize(
     "class_values",
     [

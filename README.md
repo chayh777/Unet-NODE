@@ -4,13 +4,16 @@
 Produce before/after bottleneck visualizations for a U-Net whose encoder is ImageNet-pretrained and then fully finetuned on ISIC 2018. The pipeline exports both the initial pretrained-model checkpoint and the final finetuned-model checkpoint before extracting embeddings.
 
 ## Data layout
-- Current server-side layout is expected under `data/isic2018/`.
-- Training images: `data/isic2018/ISIC_2018_Task1_2_Training/Train/Images/`
-- Training masks: `data/isic2018/ISIC_2018_Task1_2_Training/Train/Masks/`
-- Validation metadata reference: `data/isic2018/validation-metadata.csv`
-- Image filenames must match mask filenames by stem (for example `ISIC_0001.jpg` with `ISIC_0001.png`).
+- Current local layout is expected under `data/`.
+- Training images: `data/train/images/`
+- Training masks: `data/train/labels/`
+- Validation images: `data/validation/images/`
+- Validation masks: `data/validation/labels/`
+- Validation metadata reference: `data/challenge-2018-task-1-2-validation_metadata_2025-12-22.csv`
+- Image filenames must match mask filenames by stem. The loader supports either `ISIC_0001.png` or `ISIC_0001_segmentation.png`.
 - Masks are binary: black `0` for background and white `255` for lesion. The loader binarizes them to `0/1`.
-- This repo currently points the main experiment config at the `Train` image/mask pair directories shown above.
+- Training currently uses `data/train`.
+- Bottleneck extraction / visualization currently uses `data/validation` when `isic_eval_images_dir` and `isic_eval_masks_dir` are set in the config.
 
 - Supported Python `3.10` or `3.11`.
 - Install dependencies: `pip install -r requirements.txt`.

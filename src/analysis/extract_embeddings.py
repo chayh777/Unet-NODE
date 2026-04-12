@@ -61,9 +61,17 @@ def _run_extraction(
     state_name: str,
     output_name: str,
 ) -> Path:
+    extraction_images_dir = config["paths"].get(
+        "isic_eval_images_dir",
+        config["paths"]["isic_images_dir"],
+    )
+    extraction_masks_dir = config["paths"].get(
+        "isic_eval_masks_dir",
+        config["paths"]["isic_masks_dir"],
+    )
     dataset = ISIC2018Dataset(
-        images_dir=config["paths"]["isic_images_dir"],
-        masks_dir=config["paths"]["isic_masks_dir"],
+        images_dir=extraction_images_dir,
+        masks_dir=extraction_masks_dir,
         image_size=config["dataset"]["image_size"],
         class_values=config["dataset"]["class_values"],
     )

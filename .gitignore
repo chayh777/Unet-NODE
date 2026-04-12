@@ -15,7 +15,7 @@ artifacts/
 smoke_run/
 
 # Local datasets
-data/isic2018/
+/data/
 
 # OS/editor noise
 .DS_Store
