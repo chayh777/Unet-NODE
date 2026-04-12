@@ -4,9 +4,13 @@
 Produce before/after bottleneck visualizations for a U-Net whose encoder is ImageNet-pretrained and then fully finetuned on ISIC 2018. The pipeline exports both the initial pretrained-model checkpoint and the final finetuned-model checkpoint before extracting embeddings.
 
 ## Data layout
-- `data/isic2018/images/`: RGB lesion images named like `ISIC_0001.jpg`. Each image filename must match a mask filename by stem (e.g., `ISIC_0001.jpg` with `ISIC_0001.png`).
-- `data/isic2018/masks/`: binary `.png` masks with values 0/1 only (0=background, 1=lesion); filenames are matched to images by stem.
-- `data/isic2018/eval_split.csv`: CSV listing evaluation sample ids and their state. At a minimum it should have a header like `sample_id,state` and rows marking `state=eval` for the split used during embedding extraction.
+- Current server-side layout is expected under `data/isic2018/`.
+- Training images: `data/isic2018/ISIC_2018_Task1_2_Training/Train/Images/`
+- Training masks: `data/isic2018/ISIC_2018_Task1_2_Training/Train/Masks/`
+- Validation metadata reference: `data/isic2018/validation-metadata.csv`
+- Image filenames must match mask filenames by stem (for example `ISIC_0001.jpg` with `ISIC_0001.png`).
+- Masks are binary: black `0` for background and white `255` for lesion. The loader binarizes them to `0/1`.
+- This repo currently points the main experiment config at the `Train` image/mask pair directories shown above.
 
 - Supported Python `3.10` or `3.11`.
 - Install dependencies: `pip install -r requirements.txt`.

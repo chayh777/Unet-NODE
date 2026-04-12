@@ -1,8 +1,8 @@
 seed: 42  # controls global randomness (shuffling/augmentation) while eval_split.csv governs the fixed split
 
 paths:
-  isic_images_dir: data/isic2018/images
-  isic_masks_dir: data/isic2018/masks
+  isic_images_dir: data/isic2018/ISIC_2018_Task1_2_Training/Train/Images
+  isic_masks_dir: data/isic2018/ISIC_2018_Task1_2_Training/Train/Masks
   artifacts_dir: artifacts
 
 dataset:
@@ -10,7 +10,7 @@ dataset:
   class_values:
     background: 0
     lesion: 1
-  eval_split_csv: data/isic2018/eval_split.csv
+  eval_split_csv: data/isic2018/validation-metadata.csv
 
 model:
   encoder_name: resnet34
