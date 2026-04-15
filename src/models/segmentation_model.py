@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.models.adapters import ConvBottleneckAdapter, IdentityAdapter
-from src.models.node_adapter import NODEAdapter
+from .adapters import ConvBottleneckAdapter, IdentityAdapter
+from .node_adapter import NODEAdapter
 
 
 AdapterType = Literal["none", "conv", "node"]
 
 
-@dataclass(frozen=True)
-class SegmentationModelOutput:
+class SegmentationModelOutput(NamedTuple):
     logits: torch.Tensor
     bottleneck: torch.Tensor
     adapted_bottleneck: torch.Tensor
@@ -63,7 +61,61 @@ class _FallbackEncoder(nn.Module):
         return [f1, f2, f3, f4]
 
 
+class _TimmDependencyError(RuntimeError):
+    """Raised when timm cannot be imported due to dependency/environment issues."""
+
+    def __init__(self, message: str, *, cause: BaseException) -> None:
+        super().__init__(message)
+        self.__cause__ = cause
+
+
+def _is_timm_dependency_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return True
+    # Common "version mismatch" style failures during import in this environment.
+    if isinstance(exc, AttributeError):
+        msg = str(exc)
+        if "torch.utils._pytree" in msg or "register_pytree_node" in msg:
+            return True
+    return False
+
+
+def _build_timm_encoder(
+    *,
+    encoder_name: str,
+    encoder_weights: str | None,
+    in_channels: int,
+) -> tuple[nn.Module, list[int]]:
+    """
+    Build a timm encoder in features_only mode.
+
+    Only raises _TimmDependencyError for import/dependency problems.
+    Any create_model/config errors propagate as-is.
+    """
+    try:
+        import timm  # type: ignore
+    except Exception as exc:  # noqa: BLE001 - we reclassify known dependency failures
+        if _is_timm_dependency_error(exc):
+            raise _TimmDependencyError(
+                "Failed to import timm due to dependency/environment mismatch.", cause=exc
+            ) from exc
+        raise
+
+    encoder = timm.create_model(
+        encoder_name,
+        pretrained=encoder_weights == "imagenet",
+        features_only=True,
+        in_chans=in_channels,
+    )
+    encoder_channels = encoder.feature_info.channels()
+    if not encoder_channels:
+        raise ValueError("Encoder must expose at least one feature map.")
+    return encoder, encoder_channels
+
+
 class SegmentationModel(nn.Module):
+    Output = SegmentationModelOutput
+
     def __init__(
         self,
         *,
@@ -85,23 +137,14 @@ class SegmentationModel(nn.Module):
                 f"encoder_weights must be one of {allowed_weights}; got {encoder_weights}"
             )
 
-        # Preferred path: timm features-only encoder.
-        # Some environments ship incompatible torchvision/transformers/torch combos; if timm
-        # import fails at runtime, fall back to a tiny conv encoder so tests remain runnable.
-        encoder_channels: list[int]
         try:
-            import timm  # type: ignore
-
-            self.encoder = timm.create_model(
-                encoder_name,
-                pretrained=encoder_weights == "imagenet",
-                features_only=True,
-                in_chans=in_channels,
+            encoder, encoder_channels = _build_timm_encoder(
+                encoder_name=encoder_name,
+                encoder_weights=encoder_weights,
+                in_channels=in_channels,
             )
-            encoder_channels = self.encoder.feature_info.channels()
-            if not encoder_channels:
-                raise ValueError("Encoder must expose at least one feature map.")
-        except Exception:
+            self.encoder = encoder
+        except _TimmDependencyError:
             self.encoder = _FallbackEncoder(in_channels=in_channels)
             encoder_channels = self.encoder.feature_info.channels()
 
@@ -144,7 +187,7 @@ class SegmentationModel(nn.Module):
             for p in self.encoder.parameters():
                 p.requires_grad = False
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> "SegmentationModel.Output":
         features = self.encoder(x)
         bottleneck = self.bottleneck_proj(features[-1])
         adapted_bottleneck = self.adapter(bottleneck)
@@ -155,11 +198,11 @@ class SegmentationModel(nn.Module):
             logits, size=x.shape[-2:], mode="bilinear", align_corners=False
         )
 
-        return {
-            "logits": logits,
-            "bottleneck": bottleneck,
-            "adapted_bottleneck": adapted_bottleneck,
-        }
+        return SegmentationModel.Output(
+            logits=logits,
+            bottleneck=bottleneck,
+            adapted_bottleneck=adapted_bottleneck,
+        )
 
 
 def build_segmentation_model(**kwargs) -> SegmentationModel:
