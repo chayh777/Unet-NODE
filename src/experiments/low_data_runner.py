@@ -1,9 +1,102 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+def _is_known_adamw_dependency_failure(exc: BaseException) -> bool:
+    """
+    Detect a very specific environment failure we want to work around.
+
+    In some environments, constructing `torch.optim.AdamW(...)` triggers an import
+    chain (torch._dynamo -> torch.onnx -> transformers) where transformers expects
+    `torch.utils._pytree.register_pytree_node`, which is missing in torch==2.1.0.
+
+    We only fall back when we see this exact signature to avoid masking genuine
+    optimizer/configuration bugs.
+    """
+    if not isinstance(exc, AttributeError):
+        return False
+    msg = str(exc)
+    return "register_pytree_node" in msg and "torch.utils._pytree" in msg
+
+
+class _LocalAdamW:
+    """
+    Minimal AdamW-style optimizer used as a narrow fallback.
+
+    This exists so low-data experiments can run in environments where importing
+    torch's AdamW triggers a known dependency mismatch.
+    """
+
+    def __init__(
+        self,
+        params,
+        *,
+        lr: float,
+        weight_decay: float,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+    ) -> None:
+        self._params = [p for p in list(params) if getattr(p, "requires_grad", False)]
+        self._lr = float(lr)
+        self._weight_decay = float(weight_decay)
+        self._beta1 = float(betas[0])
+        self._beta2 = float(betas[1])
+        self._eps = float(eps)
+        self._state: dict[object, dict[str, object]] = {}
+
+    def zero_grad(self) -> None:
+        for p in self._params:
+            if getattr(p, "grad", None) is not None:
+                setattr(p, "grad", None)
+
+    def step(self) -> None:
+        import torch
+
+        with torch.no_grad():
+            for p in self._params:
+                grad = getattr(p, "grad", None)
+                if grad is None:
+                    continue
+                if not torch.is_tensor(grad):
+                    continue
+
+                state = self._state.get(p)
+                if state is None:
+                    state = {
+                        "step": 0,
+                        "exp_avg": torch.zeros_like(p),
+                        "exp_avg_sq": torch.zeros_like(p),
+                    }
+                    self._state[p] = state
+
+                # Decoupled weight decay (AdamW): apply directly to the weights.
+                if self._weight_decay != 0.0:
+                    p.mul_(1.0 - self._lr * self._weight_decay)
+
+                step_num = int(state["step"]) + 1
+                state["step"] = step_num
+
+                exp_avg = state["exp_avg"]
+                exp_avg_sq = state["exp_avg_sq"]
+                assert torch.is_tensor(exp_avg)
+                assert torch.is_tensor(exp_avg_sq)
+
+                exp_avg.mul_(self._beta1).add_(grad, alpha=1.0 - self._beta1)
+                exp_avg_sq.mul_(self._beta2).addcmul_(
+                    grad, grad, value=1.0 - self._beta2
+                )
+
+                bias_correction1 = 1.0 - math.pow(self._beta1, step_num)
+                bias_correction2 = 1.0 - math.pow(self._beta2, step_num)
+                step_size = self._lr / bias_correction1
+
+                denom = (exp_avg_sq / bias_correction2).sqrt().add_(self._eps)
+                p.addcdiv_(exp_avg, denom, value=-step_size)
 
 
 def load_config(config_path: str | Path) -> dict[str, Any]:
@@ -175,11 +268,25 @@ def run_group(config_path: str | Path, group: str):
         node_step_size=float(config["node"]["step_size"]),
     )
 
-    optimizer = torch.optim.AdamW(
-        [param for param in model.parameters() if getattr(param, "requires_grad", False)],
-        lr=float(config["train"]["learning_rate"]),
-        weight_decay=float(config["train"]["weight_decay"]),
-    )
+    trainable_params = [
+        param for param in model.parameters() if getattr(param, "requires_grad", False)
+    ]
+    lr = float(config["train"]["learning_rate"])
+    weight_decay = float(config["train"]["weight_decay"])
+    try:
+        optimizer = torch.optim.AdamW(
+            trainable_params,
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+    except AttributeError as exc:
+        if not _is_known_adamw_dependency_failure(exc):
+            raise
+        optimizer = _LocalAdamW(
+            trainable_params,
+            lr=lr,
+            weight_decay=weight_decay,
+        )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)

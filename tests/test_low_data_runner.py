@@ -339,3 +339,170 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert Path(calls["fit"]["output_dir"]).name == "group_b"
     assert calls["output_dir_exists"] is True
+
+
+def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error(
+    tmp_path, monkeypatch
+):
+    """
+    Regression test for a specific environment failure:
+
+    In some installations, constructing `torch.optim.AdamW(...)` raises an
+    AttributeError referencing `torch.utils._pytree.register_pytree_node`.
+    The runner should fall back to a local optimizer implementation so the
+    low-data experiment can run without broad environment changes.
+    """
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+
+    fake_isic = ModuleType("src.data.isic2018")
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class ISIC2018Dataset:
+        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
+            self.images_dir = images_dir
+            self.masks_dir = masks_dir
+            self.image_size = image_size
+            self.class_values = class_values
+            self.sample_ids = sample_ids
+            if sample_ids is None:
+                self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
+            else:
+                self.image_paths = [_FakePath(stem) for stem in list(sample_ids)]
+
+    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+
+    fake_splits = ModuleType("src.data.splits")
+
+    def build_ratio_subset(sample_ids, ratio, seed):
+        return ["img2", "img3"]
+
+    def save_split_manifest(sample_ids, output_path):
+        return None
+
+    fake_splits.build_ratio_subset = build_ratio_subset
+    fake_splits.save_split_manifest = save_split_manifest
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+            self.grad = None
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True), _FakeParam(False)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    def build_segmentation_model(**kwargs):
+        return _FakeModel()
+
+    fake_models.build_segmentation_model = build_segmentation_model
+
+    fake_engine = ModuleType("src.training.engine")
+
+    def fit(model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"):
+        calls["optimizer"] = optimizer
+        return "FIT_RESULT"
+
+    fake_engine.fit = fit
+
+    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    class _AdamWThatFails:
+        def __init__(self, params, lr, weight_decay):
+            raise AttributeError(
+                "module 'torch.utils._pytree' has no attribute 'register_pytree_node'"
+            )
+
+    monkeypatch.setattr(torch.optim, "AdamW", _AdamWThatFails)
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            return None
+
+    monkeypatch.setattr(torch.utils.data, "DataLoader", _FakeDataLoader)
+
+    from src.experiments.low_data_runner import run_group
+
+    result = run_group(config_path, "A")
+    assert result == "FIT_RESULT"
+
+    optimizer = calls["optimizer"]
+    assert hasattr(optimizer, "zero_grad")
+    assert hasattr(optimizer, "step")
+
+
+def test_local_adamw_step_updates_trainable_params_and_zero_grad_clears_grads():
+    import torch
+
+    from src.experiments.low_data_runner import _LocalAdamW
+
+    param = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+    param.grad = torch.tensor([1.0], dtype=torch.float32)
+
+    opt = _LocalAdamW([param], lr=0.1, weight_decay=0.01)
+    before = param.detach().clone()
+
+    opt.step()
+    after = param.detach().clone()
+    assert torch.all(after < before)
+
+    # Reattach a grad and ensure zero_grad clears it.
+    param.grad = torch.tensor([1.0], dtype=torch.float32)
+    opt.zero_grad()
+    assert param.grad is None
