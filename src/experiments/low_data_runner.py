@@ -40,9 +40,28 @@ def _is_known_windows_dataloader_worker_permission_error(exc: BaseException) -> 
     # On Windows, `OSError`-subclasses may have `winerror`; however this isn't guaranteed
     # if the exception is constructed/raised elsewhere, so we also inspect the message.
     winerror = getattr(exc, "winerror", None)
-    if winerror == 5:
-        return True
-    return "[WinError 5]" in str(exc) or "WinError 5" in str(exc)
+    msg = str(exc)
+    is_winerror_5 = winerror == 5 or ("WinError 5" in msg)
+    if not is_winerror_5:
+        return False
+
+    # Key narrowing: only treat it as a DataLoader worker-start issue if the traceback
+    # points into torch's DataLoader/multiprocessing stack.
+    tb = getattr(exc, "__traceback__", None)
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        norm = filename.replace("\\", "/").lower()
+        if (
+            "torch/utils/data/dataloader" in norm
+            or "torch/utils/data/_utils" in norm
+            or "/multiprocessing/" in norm
+        ):
+            return True
+        tb = tb.tb_next
+
+    # Last resort: only accept explicit DataLoader worker messaging.
+    msg_norm = msg.lower()
+    return ("dataloader" in msg_norm) and ("worker" in msg_norm or "multiprocessing" in msg_norm)
 
 
 class _LocalAdamW:

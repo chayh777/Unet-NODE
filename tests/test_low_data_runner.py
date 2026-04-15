@@ -444,6 +444,29 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
 
     fake_engine = ModuleType("src.training.engine")
 
+    def _raise_permission_error_from_fake_file(filename: str) -> None:
+        """
+        Raise a PermissionError whose traceback includes `filename`.
+
+        We use `compile(..., filename=...)` so the traceback resembles a real-world
+        failure inside torch's DataLoader/multiprocessing stack.
+        """
+        namespace: dict[str, object] = {}
+        code = compile(
+            "\n".join(
+                [
+                    "def boom():",
+                    "    raise PermissionError('[WinError 5] Access is denied.')",
+                ]
+            ),
+            filename,
+            "exec",
+        )
+        exec(code, namespace, namespace)  # noqa: S102 - intentional for test
+        boom = namespace["boom"]
+        assert callable(boom)
+        boom()
+
     def fit(
         model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"
     ):
@@ -451,7 +474,8 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
             {"train_loader": train_loader, "val_loader": val_loader}
         )
         if len(calls["fit_calls"]) == 1:
-            raise PermissionError("[WinError 5] 拒绝访问。")
+            # Simulate a DataLoader/multiprocessing-originated PermissionError.
+            _raise_permission_error_from_fake_file("torch/utils/data/dataloader.py")
         return "FIT_RESULT"
 
     fake_engine.fit = fit
@@ -486,6 +510,150 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
     assert calls["dataloaders"][0]["pin_memory"] is True
     assert calls["dataloaders"][2]["num_workers"] == 0
     assert calls["dataloaders"][2]["pin_memory"] is True
+
+
+def test_run_group_does_not_retry_on_unrelated_winerror5_permission_error(
+    tmp_path, monkeypatch
+):
+    """
+    Ensure we don't mask unrelated WinError 5 PermissionErrors.
+
+    The fallback is intended only for Windows DataLoader worker-start failures,
+    not arbitrary PermissionError: [WinError 5] cases (e.g., artifact writing).
+    """
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "  num_workers: 2",
+                "  pin_memory: true",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+
+    fake_isic = ModuleType("src.data.isic2018")
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class ISIC2018Dataset:
+        def __init__(
+            self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None
+        ):
+            self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
+
+    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+
+    fake_splits = ModuleType("src.data.splits")
+    fake_splits.build_ratio_subset = lambda sample_ids, ratio, seed: ["img2", "img3"]
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    fake_models.build_segmentation_model = lambda **kwargs: _FakeModel()
+
+    fake_engine = ModuleType("src.training.engine")
+
+    def _raise_permission_error_from_fake_file(filename: str) -> None:
+        namespace: dict[str, object] = {}
+        code = compile(
+            "\n".join(
+                [
+                    "def boom():",
+                    "    raise PermissionError('[WinError 5] Access is denied.')",
+                ]
+            ),
+            filename,
+            "exec",
+        )
+        exec(code, namespace, namespace)  # noqa: S102 - intentional for test
+        boom = namespace["boom"]
+        assert callable(boom)
+        boom()
+
+    def fit(
+        model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"
+    ):
+        calls.setdefault("fit_calls", []).append(1)
+        # Simulate a non-DataLoader PermissionError (e.g. file write).
+        _raise_permission_error_from_fake_file("pathlib.py")
+
+    fake_engine.fit = fit
+
+    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.optim, "AdamW", lambda params, lr, weight_decay: object())
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            return None
+
+    monkeypatch.setattr(torch.utils.data, "DataLoader", _FakeDataLoader)
+
+    from src.experiments.low_data_runner import run_group
+
+    try:
+        run_group(config_path, "A")
+        assert False, "Expected PermissionError to propagate for unrelated WinError 5"
+    except PermissionError as exc:
+        assert "WinError 5" in str(exc)
+
+    # No retry: should call fit exactly once.
+    assert calls["fit_calls"] == [1]
 
 
 def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error(
