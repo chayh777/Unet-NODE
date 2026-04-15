@@ -24,6 +24,27 @@ def _is_known_adamw_dependency_failure(exc: BaseException) -> bool:
     return "register_pytree_node" in msg and "torch.utils._pytree" in msg
 
 
+def _is_known_windows_dataloader_worker_permission_error(exc: BaseException) -> bool:
+    """
+    Detect a narrow Windows DataLoader worker-start PermissionError we can safely retry.
+
+    Empirically, when DataLoader workers fail to spawn under Windows, training can raise:
+      PermissionError: [WinError 5] Access is denied
+    (including localized variants like Chinese "拒绝访问。").
+
+    We intentionally keep this check strict to avoid masking arbitrary training failures.
+    """
+    if not isinstance(exc, PermissionError):
+        return False
+
+    # On Windows, `OSError`-subclasses may have `winerror`; however this isn't guaranteed
+    # if the exception is constructed/raised elsewhere, so we also inspect the message.
+    winerror = getattr(exc, "winerror", None)
+    if winerror == 5:
+        return True
+    return "[WinError 5]" in str(exc) or "WinError 5" in str(exc)
+
+
 class _LocalAdamW:
     """
     Minimal AdamW-style optimizer used as a narrow fallback.
@@ -248,12 +269,17 @@ def run_group(config_path: str | Path, group: str):
     if "pin_memory" in config.get("data", {}):
         loader_kwargs["pin_memory"] = bool(config["data"]["pin_memory"])
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, **loader_kwargs
-    )
+    def _build_loaders(*, num_workers_override: int | None) -> tuple[object, object]:
+        kwargs = dict(loader_kwargs)
+        if num_workers_override is not None:
+            kwargs["num_workers"] = int(num_workers_override)
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True, **kwargs
+        )
+        val_loader = DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False, **kwargs
+        )
+        return train_loader, val_loader
 
     model = build_segmentation_model(
         encoder_name=config["model"]["encoder_name"],
@@ -293,13 +319,36 @@ def run_group(config_path: str | Path, group: str):
 
     output_dir = Path(config["paths"]["artifacts_dir"]) / f"group_{group.lower()}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    return fit(
-        model,
-        train_loader,
-        val_loader,
-        optimizer,
-        int(config["train"]["epochs"]),
-        int(config["train"]["early_stopping_patience"]),
-        output_dir,
-        device=device,
-    )
+
+    train_loader, val_loader = _build_loaders(num_workers_override=None)
+    try:
+        return fit(
+            model,
+            train_loader,
+            val_loader,
+            optimizer,
+            int(config["train"]["epochs"]),
+            int(config["train"]["early_stopping_patience"]),
+            output_dir,
+            device=device,
+        )
+    except PermissionError as exc:
+        configured_workers = int(loader_kwargs.get("num_workers", 0))
+        if (
+            configured_workers > 0
+            and _is_known_windows_dataloader_worker_permission_error(exc)
+        ):
+            # Retry exactly once with single-process loading to work around a known
+            # Windows worker spawn PermissionError.
+            train_loader, val_loader = _build_loaders(num_workers_override=0)
+            return fit(
+                model,
+                train_loader,
+                val_loader,
+                optimizer,
+                int(config["train"]["epochs"]),
+                int(config["train"]["early_stopping_patience"]),
+                output_dir,
+                device=device,
+            )
+        raise

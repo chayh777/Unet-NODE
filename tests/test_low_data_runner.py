@@ -341,6 +341,153 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     assert calls["output_dir_exists"] is True
 
 
+def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloader_permission_error(
+    tmp_path, monkeypatch
+):
+    """
+    Regression test for a Windows-specific failure mode:
+
+    When DataLoader worker processes fail to start under Windows, training can
+    raise PermissionError: [WinError 5] Access is denied (or localized variants).
+
+    The runner should retry exactly once with num_workers=0 instead of crashing,
+    while keeping the configured num_workers by default.
+    """
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "  num_workers: 2",
+                "  pin_memory: true",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+
+    fake_isic = ModuleType("src.data.isic2018")
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class ISIC2018Dataset:
+        def __init__(
+            self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None
+        ):
+            self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
+
+    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+
+    fake_splits = ModuleType("src.data.splits")
+
+    def build_ratio_subset(sample_ids, ratio, seed):
+        return ["img2", "img3"]
+
+    def save_split_manifest(sample_ids, output_path):
+        return None
+
+    fake_splits.build_ratio_subset = build_ratio_subset
+    fake_splits.save_split_manifest = save_split_manifest
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    def build_segmentation_model(**kwargs):
+        return _FakeModel()
+
+    fake_models.build_segmentation_model = build_segmentation_model
+
+    fake_engine = ModuleType("src.training.engine")
+
+    def fit(
+        model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"
+    ):
+        calls.setdefault("fit_calls", []).append(
+            {"train_loader": train_loader, "val_loader": val_loader}
+        )
+        if len(calls["fit_calls"]) == 1:
+            raise PermissionError("[WinError 5] 拒绝访问。")
+        return "FIT_RESULT"
+
+    fake_engine.fit = fit
+
+    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.optim, "AdamW", lambda params, lr, weight_decay: object())
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            self.batch_size = batch_size
+            self.shuffle = shuffle
+            self.kwargs = dict(kwargs)
+            calls.setdefault("dataloaders", []).append(self.kwargs)
+
+    monkeypatch.setattr(torch.utils.data, "DataLoader", _FakeDataLoader)
+
+    from src.experiments.low_data_runner import run_group
+
+    result = run_group(config_path, "A")
+    assert result == "FIT_RESULT"
+
+    # Default pass should use configured values, then retry should force num_workers=0.
+    assert len(calls["fit_calls"]) == 2
+    assert calls["dataloaders"][0]["num_workers"] == 2
+    assert calls["dataloaders"][0]["pin_memory"] is True
+    assert calls["dataloaders"][2]["num_workers"] == 0
+    assert calls["dataloaders"][2]["pin_memory"] is True
+
+
 def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error(
     tmp_path, monkeypatch
 ):
