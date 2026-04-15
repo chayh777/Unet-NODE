@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import random
 from pathlib import Path
 
@@ -12,7 +13,7 @@ def build_ratio_subset(sample_ids: list[str], ratio: float, seed: int) -> list[s
         raise ValueError("ratio must be in the interval (0, 1]")
 
     sorted_ids = sorted(sample_ids)
-    target_count = max(1, round(len(sorted_ids) * ratio))
+    target_count = max(1, math.ceil(len(sorted_ids) * ratio))
     selected = random.Random(seed).sample(sorted_ids, target_count)
     return sorted(selected)
 
@@ -24,5 +25,5 @@ def save_split_manifest(sample_ids: list[str], output_path: str | Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(["sample_id"])
-        for sample_id in sample_ids:
+        for sample_id in sorted(sample_ids):
             writer.writerow([sample_id])
