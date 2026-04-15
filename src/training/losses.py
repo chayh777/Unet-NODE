@@ -4,6 +4,16 @@ import torch
 from torch import nn
 
 
+def _normalize_binary_targets(targets: torch.Tensor) -> torch.Tensor:
+    t = targets.float()
+    if t.numel() == 0:
+        return t
+    maxv = t.detach().max()
+    if float(maxv) > 1.0:
+        t = t / maxv.clamp(min=1.0)
+    return (t >= 0.5).to(dtype=torch.float32)
+
+
 class DiceBCELoss(nn.Module):
     """
     Binary segmentation loss: BCEWithLogitsLoss + Dice loss.
@@ -23,7 +33,7 @@ class DiceBCELoss(nn.Module):
             raise ValueError(f"logits and targets must have same shape, got {logits.shape} vs {targets.shape}")
 
         logits = logits.float()
-        targets = targets.float()
+        targets = _normalize_binary_targets(targets)
 
         bce = self._bce(logits, targets)
 
@@ -36,4 +46,3 @@ class DiceBCELoss(nn.Module):
         dice_loss = (1.0 - dice).mean()
 
         return bce + dice_loss
-
