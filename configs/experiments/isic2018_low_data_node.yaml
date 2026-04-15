@@ -8,22 +8,22 @@ paths:
 data:
   image_size: 256
   train_ratio: 0.1
-  num_workers: 4
-  pin_memory: true
+  num_workers: 4  # dataloader workers; tune per CPU/core availability
+  pin_memory: true  # set false on CPU-only runs or if host RAM is tight
 model:
   encoder_name: resnet34
   encoder_weights: imagenet
   in_channels: 3
   num_classes: 1
   bottleneck_channels: 512
-  freeze_encoder: true
+  freeze_encoder: true  # keeps ImageNet encoder fixed for low-data stability
 adapter:
   type: node
   hidden_channels: 512
 node:
   solver: euler
-  steps: 4
-  step_size: 0.25
+  steps: 4  # integration sub-steps per forward pass (speed vs fidelity)
+  step_size: 0.25  # NODE step size; lower is usually stabler but slower
 train:
   batch_size: 8
   epochs: 50

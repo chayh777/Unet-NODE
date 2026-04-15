@@ -44,12 +44,21 @@ python scripts/run_bottleneck_visualization.py --config configs/experiments/isic
 - Warning: UMAP shows dramatic separation but the PCA sanity check indicates no meaningful shift.
 
 ## Low-data NODE experiment
-Run low-data experiments across three groups:
-- Group A: 10% train split with NODE adapter baseline and full artifact logging.
-- Group B: alternate low-data run for contract parity with checkpoint output.
-- Group C: alternate low-data run for contract parity with checkpoint output.
+This section defines the command/output contract for an upcoming low-data runner (`scripts/run_low_data_experiment.py`).
+At this commit, treat this as a planned interface for next-step implementation, not a currently executable script.
 
-Command:
+Use `configs/experiments/isic2018_low_data_node.yaml` as the low-data runner config contract.
+It is intentionally separate from `configs/experiments/isic2018_bottleneck_visualization.yaml` because the schemas serve different experiment pipelines.
+
+Group contract:
+- Group A: 10% labeled-data run (`train_ratio: 0.1`) that records checkpoint, history, and metrics.
+- Group B: full-data control run using the same architecture/training contract, checkpoint required.
+- Group C: low-data repeat run with a different sampling split seed, checkpoint required.
+- `--group A` writes under `artifacts/low_data/group_a/`.
+- `--group B` writes under `artifacts/low_data/group_b/`.
+- `--group C` writes under `artifacts/low_data/group_c/`.
+
+Planned command contract:
 ```
 python scripts/run_low_data_experiment.py --config configs/experiments/isic2018_low_data_node.yaml --group A
 ```
