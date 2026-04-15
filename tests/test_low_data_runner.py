@@ -79,8 +79,31 @@ def _ensure_src_experiments_importable() -> None:
     if not experiments_dir.exists():
         return
 
-    _ensure_package("src", src_dir)
-    _ensure_package("src.experiments", experiments_dir)
+    # Prefer not to clobber an existing `src` module if present; just ensure our
+    # workspace paths are part of the package path used for resolution.
+    if "src" not in sys.modules:
+        _ensure_package("src", src_dir)
+    else:
+        mod = sys.modules["src"]
+        if not hasattr(mod, "__path__"):
+            _ensure_package("src", src_dir)
+        else:
+            paths = list(getattr(mod, "__path__"))  # type: ignore[arg-type]
+            if str(src_dir) not in paths:
+                paths.insert(0, str(src_dir))
+                setattr(mod, "__path__", paths)
+
+    if "src.experiments" not in sys.modules:
+        _ensure_package("src.experiments", experiments_dir)
+    else:
+        mod = sys.modules["src.experiments"]
+        if not hasattr(mod, "__path__"):
+            _ensure_package("src.experiments", experiments_dir)
+        else:
+            paths = list(getattr(mod, "__path__"))  # type: ignore[arg-type]
+            if str(experiments_dir) not in paths:
+                paths.insert(0, str(experiments_dir))
+                setattr(mod, "__path__", paths)
 
 
 _ensure_src_experiments_importable()
@@ -102,6 +125,54 @@ def test_load_config_parses_yaml(tmp_path):
 
     config = load_config(config_path)
     assert config["seed"] == 123
+
+
+def test_load_config_raises_clear_error_for_malformed_yaml(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("seed: [1,2\n", encoding="utf-8")
+
+    from src.experiments.low_data_runner import load_config
+
+    try:
+        load_config(config_path)
+        assert False, "Expected load_config() to raise on malformed YAML"
+    except ValueError as exc:
+        assert "YAML" in str(exc) or "yaml" in str(exc)
+
+
+def test_run_group_validates_required_config_keys(tmp_path, monkeypatch):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    # Missing many required keys on purpose.
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    # Stub minimal modules so import doesn't fail; validation should happen before use.
+    monkeypatch.setitem(sys.modules, "src.data.isic2018", ModuleType("src.data.isic2018"))
+    monkeypatch.setitem(sys.modules, "src.data.splits", ModuleType("src.data.splits"))
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", ModuleType("src.models.segmentation_model"))
+    monkeypatch.setitem(sys.modules, "src.training.engine", ModuleType("src.training.engine"))
+
+    from src.experiments.low_data_runner import run_group
+
+    try:
+        run_group(config_path, "A")
+        assert False, "Expected run_group() to raise for missing keys"
+    except ValueError as exc:
+        msg = str(exc)
+        assert "paths" in msg or "train" in msg or "model" in msg
 
 
 def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkeypatch):
@@ -175,6 +246,8 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
 
     def save_split_manifest(sample_ids, output_path):
         calls["save_split_manifest"] = {"sample_ids": list(sample_ids), "output_path": str(output_path)}
+        # Runner should ensure parent dirs exist before calling this helper.
+        calls["split_parent_exists"] = Path(output_path).parent.exists()
 
     fake_splits.build_ratio_subset = build_ratio_subset
     fake_splits.save_split_manifest = save_split_manifest
@@ -212,6 +285,8 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
             "device": device,
             "optimizer": optimizer,
         }
+        # Runner should ensure output_dir exists before training starts.
+        calls["output_dir_exists"] = Path(output_dir).exists()
         return "FIT_RESULT"
 
     fake_engine.fit = fit
@@ -259,6 +334,8 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     expected_manifest = artifacts_dir / "splits" / "train_seed42_ratio10.csv"
     assert calls["save_split_manifest"]["output_path"] == str(expected_manifest)
     assert calls["save_split_manifest"]["sample_ids"] == ["img2", "img3"]
+    assert calls["split_parent_exists"] is True
 
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert Path(calls["fit"]["output_dir"]).name == "group_b"
+    assert calls["output_dir_exists"] is True

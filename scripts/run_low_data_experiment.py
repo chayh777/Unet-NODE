@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
-from src.experiments.low_data_runner import run_group
+try:
+    from src.experiments.low_data_runner import run_group
+except ModuleNotFoundError:
+    # Allow `python scripts/run_low_data_experiment.py ...` from any CWD without
+    # requiring editable installs or global packaging.
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
+    from src.experiments.low_data_runner import run_group
 
 
 def main() -> None:
@@ -22,4 +31,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
