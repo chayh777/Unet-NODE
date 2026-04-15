@@ -42,3 +42,22 @@ python scripts/run_bottleneck_visualization.py --config configs/experiments/isic
 - Warning: only background points tighten up while lesion points stay dispersed.
 - Warning: the before/after comparison appears different because each was reduced separately (must confirm shared projection).
 - Warning: UMAP shows dramatic separation but the PCA sanity check indicates no meaningful shift.
+
+## Low-data NODE experiment
+Run low-data experiments across three groups:
+- Group A: 10% train split with NODE adapter baseline and full artifact logging.
+- Group B: alternate low-data run for contract parity with checkpoint output.
+- Group C: alternate low-data run for contract parity with checkpoint output.
+
+Command:
+```
+python scripts/run_low_data_experiment.py --config configs/experiments/isic2018_low_data_node.yaml --group A
+```
+
+Expected artifacts:
+- artifacts/low_data/group_a/best.pt
+- artifacts/low_data/group_a/history.csv
+- artifacts/low_data/group_a/metrics.json
+- artifacts/low_data/group_b/best.pt
+- artifacts/low_data/group_c/best.pt
+- artifacts/low_data/splits/train_seed42_ratio10.csv
