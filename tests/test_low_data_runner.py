@@ -64,3 +64,201 @@ def test_build_segmentation_model_freezes_encoder():
     ]
     assert encoder_flags
     assert all(flag is False for flag in encoder_flags)
+
+
+def _ensure_src_experiments_importable() -> None:
+    """
+    Avoid sys.path mutation while ensuring `from src.experiments...` resolves to
+    this workspace during pytest collection.
+
+    Some environments ship their own top-level `src` which can shadow ours.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    src_dir = repo_root / "src"
+    experiments_dir = src_dir / "experiments"
+    if not experiments_dir.exists():
+        return
+
+    _ensure_package("src", src_dir)
+    _ensure_package("src.experiments", experiments_dir)
+
+
+_ensure_src_experiments_importable()
+from src.experiments.low_data_runner import resolve_group_adapter
+
+
+def test_resolve_group_adapter_maps_groups_to_expected_types():
+    assert resolve_group_adapter("A") == "none"
+    assert resolve_group_adapter("B") == "conv"
+    assert resolve_group_adapter("C") == "node"
+
+
+def test_load_config_parses_yaml(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("seed: 123\n", encoding="utf-8")
+
+    # Import inside the test so we can watch it fail before implementation.
+    from src.experiments.low_data_runner import load_config
+
+    config = load_config(config_path)
+    assert config["seed"] == 123
+
+
+def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkeypatch):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 3",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 5",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    # Stub dependencies that run_group imports by name.
+    calls: dict[str, object] = {}
+
+    fake_isic = ModuleType("src.data.isic2018")
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class ISIC2018Dataset:
+        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
+            self.images_dir = images_dir
+            self.masks_dir = masks_dir
+            self.image_size = image_size
+            self.class_values = class_values
+            self.sample_ids = sample_ids
+            if sample_ids is None:
+                self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
+            else:
+                self.image_paths = [_FakePath(stem) for stem in list(sample_ids)]
+
+    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+
+    fake_splits = ModuleType("src.data.splits")
+
+    def build_ratio_subset(sample_ids, ratio, seed):
+        calls["build_ratio_subset"] = {"sample_ids": list(sample_ids), "ratio": ratio, "seed": seed}
+        return ["img2", "img3"]
+
+    def save_split_manifest(sample_ids, output_path):
+        calls["save_split_manifest"] = {"sample_ids": list(sample_ids), "output_path": str(output_path)}
+
+    fake_splits.build_ratio_subset = build_ratio_subset
+    fake_splits.save_split_manifest = save_split_manifest
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True), _FakeParam(False)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            calls["model_to"] = device
+            return self
+
+    def build_segmentation_model(**kwargs):
+        calls["build_segmentation_model"] = dict(kwargs)
+        return _FakeModel()
+
+    fake_models.build_segmentation_model = build_segmentation_model
+
+    fake_engine = ModuleType("src.training.engine")
+
+    def fit(model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"):
+        calls["fit"] = {
+            "epochs": epochs,
+            "patience": patience,
+            "output_dir": str(output_dir),
+            "device": device,
+            "optimizer": optimizer,
+        }
+        return "FIT_RESULT"
+
+    fake_engine.fit = fit
+
+    # Patch import targets for run_group.
+    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    def _fake_is_available() -> bool:
+        return False
+
+    monkeypatch.setattr(torch.cuda, "is_available", _fake_is_available)
+
+    class _FakeAdamW:
+        def __init__(self, params, lr, weight_decay):
+            calls["adamw"] = {
+                "num_params": len(list(params)),
+                "lr": lr,
+                "weight_decay": weight_decay,
+            }
+
+    monkeypatch.setattr(torch.optim, "AdamW", _FakeAdamW)
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            calls.setdefault("dataloaders", []).append(
+                {"batch_size": batch_size, "shuffle": shuffle, "kwargs": dict(kwargs)}
+            )
+
+    monkeypatch.setattr(torch.utils.data, "DataLoader", _FakeDataLoader)
+
+    from src.experiments.low_data_runner import run_group
+
+    result = run_group(config_path, "B")
+    assert result == "FIT_RESULT"
+
+    assert calls["build_ratio_subset"]["seed"] == 42
+    assert calls["build_ratio_subset"]["ratio"] == 0.1
+    assert calls["build_ratio_subset"]["sample_ids"] == ["img1", "img2", "img3"]
+
+    expected_manifest = artifacts_dir / "splits" / "train_seed42_ratio10.csv"
+    assert calls["save_split_manifest"]["output_path"] == str(expected_manifest)
+    assert calls["save_split_manifest"]["sample_ids"] == ["img2", "img3"]
+
+    assert calls["build_segmentation_model"]["adapter_type"] == "conv"
+    assert Path(calls["fit"]["output_dir"]).name == "group_b"
