@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 
 class ISIC2018Dataset(Dataset):
-    def __init__(self, images_dir, masks_dir, image_size, class_values):
+    def __init__(self, images_dir, masks_dir, image_size, class_values, sample_ids=None):
         self.images_dir = Path(images_dir)
         self.masks_dir = Path(masks_dir)
         self.image_size = image_size
@@ -23,7 +23,20 @@ class ISIC2018Dataset(Dataset):
             raise ValueError(
                 "ISIC2018Dataset currently requires 'background': 0 and 'lesion': 1 mappings."
             )
-        self.image_paths = sorted(self.images_dir.glob("*.jpg"))
+        all_image_paths = sorted(self.images_dir.glob("*.jpg"))
+        if sample_ids is None:
+            self.image_paths = all_image_paths
+        else:
+            # Fixed subset loading: filter by filename stem (sample_id).
+            requested_ids = list(sample_ids)
+            by_stem = {path.stem: path for path in all_image_paths}
+            missing = [sample_id for sample_id in requested_ids if sample_id not in by_stem]
+            if missing:
+                raise ValueError(
+                    "Requested sample_ids are missing from images_dir: "
+                    + ", ".join(missing)
+                )
+            self.image_paths = [by_stem[sample_id] for sample_id in requested_ids]
 
     def _resolve_mask_path(self, sample_id: str) -> Path:
         candidates = [
@@ -58,9 +71,7 @@ class ISIC2018Dataset(Dataset):
             )
 
         image_np = np.asarray(image, dtype=np.float32) / 255.0
-        mask_np = (
-            (np.asarray(mask, dtype=np.uint8) > 0).astype(np.uint8)
-        )
+        mask_np = (np.asarray(mask, dtype=np.uint8) > 0).astype(np.uint8)
 
         class_presence = {
             class_name: bool((mask_np == class_value).any())
@@ -70,6 +81,7 @@ class ISIC2018Dataset(Dataset):
         return {
             "sample_id": sample_id,
             "image": torch.from_numpy(image_np).permute(2, 0, 1),
-            "mask": torch.from_numpy(mask_np).long(),
+            # Binary segmentation training expects float mask with a channel dimension.
+            "mask": torch.from_numpy(mask_np.astype(np.float32)).unsqueeze(0),
             "class_presence": class_presence,
         }
