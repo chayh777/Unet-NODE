@@ -46,9 +46,9 @@ def test_isic_dataset_returns_expected_sample(tmp_path: Path):
     assert sample["sample_id"] == "ISIC_0001"
     assert sample["image"].shape == (3, 8, 8)
     assert sample["image"].dtype == torch.float32
-    assert sample["mask"].shape == (1, 8, 8)
-    assert sample["mask"].dtype == torch.float32
-    assert set(sample["mask"].unique().tolist()) == {0.0, 1.0}
+    assert sample["mask"].shape == (8, 8)
+    assert sample["mask"].dtype == torch.long
+    assert set(sample["mask"].unique().tolist()) == {0, 1}
     assert sample["class_presence"]["lesion"] is True
     assert sample["class_presence"]["background"] is True
 
@@ -72,6 +72,54 @@ def test_isic_dataset_can_filter_by_sample_ids(tmp_path: Path):
     )
     assert len(dataset) == 1
     assert dataset[0]["sample_id"] == "ISIC_0002"
+
+
+def test_isic_dataset_sample_ids_deduplicates_in_order(tmp_path: Path):
+    images_dir = tmp_path / "images"
+    masks_dir = tmp_path / "masks"
+    images_dir.mkdir()
+    masks_dir.mkdir()
+    for sample_id in ["ISIC_0001", "ISIC_0002"]:
+        image = np.zeros((8, 8, 3), dtype=np.uint8)
+        mask = np.zeros((8, 8), dtype=np.uint8)
+        Image.fromarray(image).save(images_dir / f"{sample_id}.jpg")
+        Image.fromarray(mask).save(masks_dir / f"{sample_id}.png")
+
+    dataset = ISIC2018Dataset(
+        images_dir=images_dir,
+        masks_dir=masks_dir,
+        image_size=8,
+        class_values={"background": 0, "lesion": 1},
+        sample_ids=["ISIC_0002", "ISIC_0002", "ISIC_0001", "ISIC_0002"],
+    )
+
+    assert len(dataset) == 2
+    assert dataset[0]["sample_id"] == "ISIC_0002"
+    assert dataset[1]["sample_id"] == "ISIC_0001"
+
+
+def test_isic_dataset_sample_ids_set_is_deterministic(tmp_path: Path):
+    images_dir = tmp_path / "images"
+    masks_dir = tmp_path / "masks"
+    images_dir.mkdir()
+    masks_dir.mkdir()
+    for sample_id in ["ISIC_0001", "ISIC_0002"]:
+        image = np.zeros((8, 8, 3), dtype=np.uint8)
+        mask = np.zeros((8, 8), dtype=np.uint8)
+        Image.fromarray(image).save(images_dir / f"{sample_id}.jpg")
+        Image.fromarray(mask).save(masks_dir / f"{sample_id}.png")
+
+    dataset = ISIC2018Dataset(
+        images_dir=images_dir,
+        masks_dir=masks_dir,
+        image_size=8,
+        class_values={"background": 0, "lesion": 1},
+        sample_ids={"ISIC_0002", "ISIC_0001"},
+    )
+
+    assert len(dataset) == 2
+    assert dataset[0]["sample_id"] == "ISIC_0001"
+    assert dataset[1]["sample_id"] == "ISIC_0002"
 
 
 def test_isic_dataset_rejects_nonbinary_class_values(tmp_path: Path):
@@ -179,4 +227,4 @@ def test_isic_dataset_handles_all_background_mask(tmp_path: Path):
     sample = dataset[0]
     assert sample["class_presence"]["background"] is True
     assert sample["class_presence"]["lesion"] is False
-    assert set(sample["mask"].unique().tolist()) == {0.0}
+    assert set(sample["mask"].unique().tolist()) == {0}

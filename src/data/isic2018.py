@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from collections.abc import Set
 
 
 class ISIC2018Dataset(Dataset):
@@ -28,7 +29,23 @@ class ISIC2018Dataset(Dataset):
             self.image_paths = all_image_paths
         else:
             # Fixed subset loading: filter by filename stem (sample_id).
-            requested_ids = list(sample_ids)
+            if isinstance(sample_ids, (str, bytes)):
+                requested_ids = [sample_ids]
+            elif isinstance(sample_ids, Set):
+                # Unordered collections should be normalized deterministically.
+                requested_ids = sorted(sample_ids)
+            else:
+                requested_ids = list(sample_ids)
+
+            # Deduplicate while preserving sequence order.
+            seen = set()
+            deduped_ids = []
+            for sample_id in requested_ids:
+                if sample_id not in seen:
+                    seen.add(sample_id)
+                    deduped_ids.append(sample_id)
+            requested_ids = deduped_ids
+
             by_stem = {path.stem: path for path in all_image_paths}
             missing = [sample_id for sample_id in requested_ids if sample_id not in by_stem]
             if missing:
@@ -81,7 +98,7 @@ class ISIC2018Dataset(Dataset):
         return {
             "sample_id": sample_id,
             "image": torch.from_numpy(image_np).permute(2, 0, 1),
-            # Binary segmentation training expects float mask with a channel dimension.
-            "mask": torch.from_numpy(mask_np.astype(np.float32)).unsqueeze(0),
+            # Preserve historical mask contract: 2D long tensor with values {0, 1}.
+            "mask": torch.from_numpy(mask_np).long(),
             "class_presence": class_presence,
         }
