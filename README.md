@@ -54,42 +54,58 @@ Group contract:
 - `--group B` writes training outputs under `artifacts/low_data/group_b/`.
 - `--group C` writes training outputs under `artifacts/low_data/group_c/`.
 
-### Implemented now: training runner and current artifact contract
-The training runner is implemented now for the three frozen-encoder variants on ISIC2018 with the same fixed 10% training subset.
+### Implemented now: training runner, geometry export, and summary reporting
+The low-data workflow is implemented now for the three frozen-encoder variants on ISIC2018 with the same fixed 10% training subset. In addition to training, the repository now supports:
+- bottleneck geometry export for `pre_adapter` and `post_adapter`
+- shared-projection visualization of bottleneck features before and after adapter evolution
+- training-curve and final-metric reporting across Groups A, B, and C
 
 Training command contract:
 ```bash
 python scripts/run_low_data_experiment.py --config configs/experiments/isic2018_low_data_node.yaml --group A
 ```
 
-Current training artifacts:
-These are the minimum contract artifacts tracked at this stage of the plan.
+Geometry export contract:
+```bash
+python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group C
+```
+
+Summary reporting contract:
+```bash
+python scripts/plot_low_data_summary.py --artifacts-dir artifacts/low_data --groups A B C
+```
+
+Current artifact contract:
 - artifacts/low_data/group_a/best.pt
 - artifacts/low_data/group_a/history.csv
 - artifacts/low_data/group_a/metrics.json
 - artifacts/low_data/group_b/best.pt
+- artifacts/low_data/group_b/history.csv
+- artifacts/low_data/group_b/metrics.json
 - artifacts/low_data/group_c/best.pt
+- artifacts/low_data/group_c/history.csv
+- artifacts/low_data/group_c/metrics.json
 - artifacts/low_data/splits/train_seed42_ratio10.csv
-
-### Planned next-step analysis contract
-The geometry export and summary plotting entrypoints below belong to the planned next-step analysis contract and are not implemented yet in this worktree.
-Repeat the training command for Groups B and C before running the summary plotting command, since that report expects trained outputs for A, B, and C. Use the geometry export command only after the corresponding low-data outputs exist.
-
-Planned analysis entrypoints:
-```bash
-python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group C
-python scripts/plot_low_data_summary.py --artifacts-dir artifacts/low_data --groups A B C
-```
-
-Planned geometry artifacts:
+- artifacts/low_data/group_a/geometry/pre_adapter_embeddings.csv
+- artifacts/low_data/group_a/geometry/post_adapter_embeddings.csv
+- artifacts/low_data/group_a/geometry/shared_projection_points.csv
+- artifacts/low_data/group_a/geometry/bottleneck_before_after_scatter.png
+- artifacts/low_data/group_a/geometry/bottleneck_before_after_density.png
 - artifacts/low_data/group_c/geometry/pre_adapter_embeddings.csv
 - artifacts/low_data/group_c/geometry/post_adapter_embeddings.csv
 - artifacts/low_data/group_c/geometry/shared_projection_points.csv
 - artifacts/low_data/group_c/geometry/bottleneck_before_after_scatter.png
 - artifacts/low_data/group_c/geometry/bottleneck_before_after_density.png
-
-Planned summary artifacts:
 - artifacts/low_data/summary/dice_curve_compare.png
 - artifacts/low_data/summary/iou_curve_compare.png
 - artifacts/low_data/summary/loss_curve_compare.png
 - artifacts/low_data/summary/final_metrics_compare.png
+- artifacts/low_data/summary/history_compare.csv
+- artifacts/low_data/summary/final_metrics_compare.csv
+
+Interpretation notes:
+- `pre_adapter` is the raw encoder-decoder bottleneck representation before the bottleneck adapter is applied.
+- `post_adapter` is the bottleneck representation after the conv adapter or NODE adapter evolves that same representation.
+- For Group A, `pre_adapter` and `post_adapter` are still exported through the unified pipeline so the geometry contract stays consistent across groups.
+- Run geometry export only after the corresponding group's `best.pt` exists.
+- Run summary reporting only after the compared groups already contain `history.csv` and `metrics.json`.
