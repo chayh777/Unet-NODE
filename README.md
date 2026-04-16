@@ -44,29 +44,52 @@ python scripts/run_bottleneck_visualization.py --config configs/experiments/isic
 - Warning: UMAP shows dramatic separation but the PCA sanity check indicates no meaningful shift.
 
 ## Low-data NODE experiment
-This section defines the command/output contract for an upcoming low-data runner (`scripts/run_low_data_experiment.py`).
-At this commit, treat this as a planned interface for next-step implementation, not a currently executable script.
-
-Use `configs/experiments/isic2018_low_data_node.yaml` as the low-data runner config contract.
-It is intentionally separate from `configs/experiments/isic2018_bottleneck_visualization.yaml` because the schemas serve different experiment pipelines.
+This section defines the low-data workflow contract built around `configs/experiments/isic2018_low_data_node.yaml`.
 
 Group contract:
-- Group A: 10% labeled-data run (`train_ratio: 0.1`) that records checkpoint, history, and metrics.
-- Group B: full-data control run using the same architecture/training contract, checkpoint required.
-- Group C: low-data repeat run with a different sampling split seed, checkpoint required.
-- `--group A` writes under `artifacts/low_data/group_a/`.
-- `--group B` writes under `artifacts/low_data/group_b/`.
-- `--group C` writes under `artifacts/low_data/group_c/`.
+- Group A: pretrained U-Net with frozen encoder and trainable decoder only
+- Group B: pretrained U-Net with frozen encoder, trainable decoder, and conv bottleneck adapter
+- Group C: pretrained U-Net with frozen encoder, trainable decoder, and NODE bottleneck adapter
+- `--group A` writes training outputs under `artifacts/low_data/group_a/`.
+- `--group B` writes training outputs under `artifacts/low_data/group_b/`.
+- `--group C` writes training outputs under `artifacts/low_data/group_c/`.
 
-Planned command contract:
-```
+### Implemented now: training runner and current artifact contract
+The training runner is implemented now for the three frozen-encoder variants on ISIC2018 with the same fixed 10% training subset.
+
+Training command contract:
+```bash
 python scripts/run_low_data_experiment.py --config configs/experiments/isic2018_low_data_node.yaml --group A
 ```
 
-Expected artifacts:
+Current training artifacts:
+These are the minimum contract artifacts tracked at this stage of the plan.
 - artifacts/low_data/group_a/best.pt
 - artifacts/low_data/group_a/history.csv
 - artifacts/low_data/group_a/metrics.json
 - artifacts/low_data/group_b/best.pt
 - artifacts/low_data/group_c/best.pt
 - artifacts/low_data/splits/train_seed42_ratio10.csv
+
+### Planned next-step analysis contract
+The geometry export and summary plotting entrypoints below belong to the planned next-step analysis contract and are not implemented yet in this worktree.
+Repeat the training command for Groups B and C before running the summary plotting command, since that report expects trained outputs for A, B, and C. Use the geometry export command only after the corresponding low-data outputs exist.
+
+Planned analysis entrypoints:
+```bash
+python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group C
+python scripts/plot_low_data_summary.py --artifacts-dir artifacts/low_data --groups A B C
+```
+
+Planned geometry artifacts:
+- artifacts/low_data/group_c/geometry/pre_adapter_embeddings.csv
+- artifacts/low_data/group_c/geometry/post_adapter_embeddings.csv
+- artifacts/low_data/group_c/geometry/shared_projection_points.csv
+- artifacts/low_data/group_c/geometry/bottleneck_before_after_scatter.png
+- artifacts/low_data/group_c/geometry/bottleneck_before_after_density.png
+
+Planned summary artifacts:
+- artifacts/low_data/summary/dice_curve_compare.png
+- artifacts/low_data/summary/iou_curve_compare.png
+- artifacts/low_data/summary/loss_curve_compare.png
+- artifacts/low_data/summary/final_metrics_compare.png
