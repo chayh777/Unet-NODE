@@ -79,17 +79,21 @@ def _density_axis(ax, subset, palette, title):
         class_subset = subset[subset["class_name"] == class_name]
         if len(class_subset) < 2:
             continue
-        sns.kdeplot(
-            data=class_subset,
-            x="x",
-            y="y",
-            fill=True,
-            cmap=_color_map_for_class(class_name),
-            levels=5,
-            alpha=0.45,
-            ax=ax,
-        )
-        plotted = True
+        try:
+            sns.kdeplot(
+                data=class_subset,
+                x="x",
+                y="y",
+                fill=True,
+                cmap=_color_map_for_class(class_name),
+                levels=5,
+                alpha=0.45,
+                ax=ax,
+            )
+            plotted = True
+        except Exception:
+            plotted = False
+            break
 
     if not plotted:
         sns.scatterplot(
@@ -130,7 +134,14 @@ def save_side_by_side_scatter(
         subset = df[df["state"] == state_name]
         _scatter_axis(ax, subset, palette, alpha, point_size, _state_title(state_name))
 
-    handles, labels = axes[0].get_legend_handles_labels()
+    handles = []
+    labels = []
+    for ax in axes:
+        axis_handles, axis_labels = ax.get_legend_handles_labels()
+        for handle, label in zip(axis_handles, axis_labels):
+            if label not in labels:
+                handles.append(handle)
+                labels.append(label)
     if handles and labels:
         fig.legend(handles, labels, loc="upper center", ncol=max(1, len(labels)))
     fig.tight_layout(rect=(0, 0, 1, 0.92))
