@@ -230,3 +230,66 @@ def test_build_final_metrics_table_combines_groups(tmp_path: Path) -> None:
             "best_checkpoint": "b.pt",
         },
     ]
+
+
+def test_write_summary_artifacts_writes_tables_and_required_plots(tmp_path: Path) -> None:
+    module = _load_low_data_reporting_module()
+    artifacts_dir = tmp_path / "artifacts"
+    _write_group_artifacts(
+        artifacts_dir,
+        group="A",
+        history_rows=[
+            {
+                "epoch": 1,
+                "train_loss": 0.9,
+                "val_loss": 0.8,
+                "val_dice": 0.5,
+                "val_iou": 0.4,
+            },
+            {
+                "epoch": 2,
+                "train_loss": 0.7,
+                "val_loss": 0.6,
+                "val_dice": 0.65,
+                "val_iou": 0.5,
+            },
+        ],
+        metrics={"best_val_dice": 0.65, "epochs_ran": 2, "best_checkpoint": "a.pt"},
+    )
+    _write_group_artifacts(
+        artifacts_dir,
+        group="B",
+        history_rows=[
+            {
+                "epoch": 1,
+                "train_loss": 1.0,
+                "val_loss": 0.9,
+                "val_dice": 0.45,
+                "val_iou": 0.3,
+            },
+            {
+                "epoch": 2,
+                "train_loss": 0.8,
+                "val_loss": 0.7,
+                "val_dice": 0.55,
+                "val_iou": 0.4,
+            },
+        ],
+        metrics={"best_val_dice": 0.55, "epochs_ran": 2, "best_checkpoint": "b.pt"},
+    )
+
+    output_dir = module.write_summary_artifacts(artifacts_dir=artifacts_dir, groups=["A", "B"])
+
+    assert output_dir == artifacts_dir / "summary"
+    assert (output_dir / "history_compare.csv").exists()
+    assert (output_dir / "final_metrics_compare.csv").exists()
+    assert (output_dir / "dice_curve_compare.png").exists()
+    assert (output_dir / "iou_curve_compare.png").exists()
+    assert (output_dir / "loss_curve_compare.png").exists()
+    assert (output_dir / "final_metrics_compare.png").exists()
+
+    history = pd.read_csv(output_dir / "history_compare.csv")
+    assert set(history["group"]) == {"A", "B"}
+
+    metrics = pd.read_csv(output_dir / "final_metrics_compare.csv")
+    assert metrics["group"].tolist() == ["A", "B"]

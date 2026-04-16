@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -80,3 +81,128 @@ def build_final_metrics_table(
             "best_checkpoint",
         ],
     )
+
+
+def _get_plotting_libs():
+    mpl_config_dir = Path.cwd() / ".matplotlib"
+    mpl_config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
+def _save_metric_curve(
+    history_table: pd.DataFrame,
+    *,
+    metric: str,
+    output_path: Path,
+    title: str,
+    ylabel: str,
+) -> None:
+    plt = _get_plotting_libs()
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    for group, group_history in history_table.groupby("group", sort=False):
+        ordered = group_history.sort_values("epoch")
+        ax.plot(ordered["epoch"], ordered[metric], marker="o", label=str(group))
+
+    ax.set_title(title)
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    ax.legend(title="Group")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
+def _save_loss_curve(history_table: pd.DataFrame, output_path: Path) -> None:
+    plt = _get_plotting_libs()
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    for group, group_history in history_table.groupby("group", sort=False):
+        ordered = group_history.sort_values("epoch")
+        ax.plot(
+            ordered["epoch"],
+            ordered["train_loss"],
+            marker="o",
+            linestyle="-",
+            label=f"{group} train",
+        )
+        ax.plot(
+            ordered["epoch"],
+            ordered["val_loss"],
+            marker="s",
+            linestyle="--",
+            label=f"{group} val",
+        )
+
+    ax.set_title("Training vs Validation Loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=2)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
+def _save_final_metrics_plot(final_metrics_table: pd.DataFrame, output_path: Path) -> None:
+    plt = _get_plotting_libs()
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    groups = [str(group) for group in final_metrics_table["group"].tolist()]
+    axes[0].bar(groups, final_metrics_table["best_val_dice"], color="#4f83cc")
+    axes[0].set_title("Best Validation Dice")
+    axes[0].set_ylabel("Dice")
+
+    axes[1].bar(groups, final_metrics_table["best_val_iou"], color="#d84b4b")
+    axes[1].set_title("Best Validation IoU")
+    axes[1].set_ylabel("IoU")
+
+    for ax in axes:
+        ax.set_xlabel("Group")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, axis="y", alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
+def write_summary_artifacts(
+    artifacts_dir: str | Path, groups: Iterable[str] = ("A", "B", "C")
+) -> Path:
+    groups = list(groups)
+    summary_dir = Path(artifacts_dir) / "summary"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+
+    history_table = build_history_table(artifacts_dir=artifacts_dir, groups=groups)
+    final_metrics_table = build_final_metrics_table(artifacts_dir=artifacts_dir, groups=groups)
+
+    history_table.to_csv(summary_dir / "history_compare.csv", index=False)
+    final_metrics_table.to_csv(summary_dir / "final_metrics_compare.csv", index=False)
+
+    _save_metric_curve(
+        history_table,
+        metric="val_dice",
+        output_path=summary_dir / "dice_curve_compare.png",
+        title="Validation Dice by Group",
+        ylabel="Dice",
+    )
+    _save_metric_curve(
+        history_table,
+        metric="val_iou",
+        output_path=summary_dir / "iou_curve_compare.png",
+        title="Validation IoU by Group",
+        ylabel="IoU",
+    )
+    _save_loss_curve(history_table, summary_dir / "loss_curve_compare.png")
+    _save_final_metrics_plot(final_metrics_table, summary_dir / "final_metrics_compare.png")
+
+    return summary_dir
