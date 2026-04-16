@@ -8,7 +8,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.data.isic2018 import ISIC2018Dataset
-from src.experiments.low_data_runner import resolve_group_adapter
+from src.experiments.low_data_runner import (
+    _is_known_windows_dataloader_worker_permission_error,
+    resolve_group_adapter,
+)
 from src.features.bottleneck_pooling import pool_class_embeddings
 from src.models.segmentation_model import build_segmentation_model
 from src.utils.io import ensure_dir, load_checkpoint
@@ -50,6 +53,57 @@ def _resolve_class_values(config: dict[str, Any]) -> dict[str, int]:
     return {"background": 0, "lesion": 1}
 
 
+def _require_mapping(config: dict[str, Any], key: str, context: str) -> dict[str, Any]:
+    if key not in config:
+        raise ValueError(f"{context} missing key {key!r}.")
+    value = config[key]
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}.{key} must be a mapping/dict, got {type(value)!r}.")
+    return value
+
+
+def _require_keys(mapping: dict[str, Any], keys: list[str], context: str) -> None:
+    missing = [key for key in keys if key not in mapping]
+    if missing:
+        raise ValueError(f"{context} missing keys {missing}.")
+
+
+def _validate_geometry_export_config(config: dict[str, Any]) -> None:
+    _require_keys(config, ["paths", "data", "train", "model", "adapter", "node"], "config")
+
+    paths = _require_mapping(config, "paths", "config")
+    _require_keys(paths, ["val_images_dir", "val_masks_dir", "artifacts_dir"], "config.paths")
+
+    data = _require_mapping(config, "data", "config")
+    _require_keys(data, ["image_size"], "config.data")
+
+    train = _require_mapping(config, "train", "config")
+    _require_keys(train, ["batch_size"], "config.train")
+
+    model = _require_mapping(config, "model", "config")
+    _require_keys(
+        model,
+        [
+            "encoder_name",
+            "encoder_weights",
+            "in_channels",
+            "num_classes",
+            "bottleneck_channels",
+            "freeze_encoder",
+        ],
+        "config.model",
+    )
+
+    adapter = _require_mapping(config, "adapter", "config")
+    _require_keys(adapter, ["hidden_channels"], "config.adapter")
+
+    node = _require_mapping(config, "node", "config")
+    _require_keys(node, ["steps", "step_size"], "config.node")
+
+    if "geometry" in config and not isinstance(config["geometry"], dict):
+        raise ValueError("config.geometry must be a mapping when provided.")
+
+
 def build_embedding_rows(
     model_output: Any,
     mask: torch.Tensor,
@@ -88,16 +142,33 @@ def build_embedding_rows(
     return rows
 
 
-def write_embedding_csv(rows: list[dict[str, Any]], output_path: Path | str) -> Path:
+def write_embedding_csv(
+    rows: list[dict[str, Any]],
+    output_path: Path | str,
+    *,
+    embedding_dim: int | None = None,
+) -> Path:
     output_path = Path(output_path)
     ensure_dir(output_path.parent)
 
-    embedding_dim = 0
+    inferred_dim: int | None = None
     for row in rows:
         embedding = row.get("embedding", [])
-        if embedding_dim == 0:
-            embedding_dim = len(embedding)
-        elif len(embedding) != embedding_dim:
+        if inferred_dim is None:
+            inferred_dim = len(embedding)
+        elif len(embedding) != inferred_dim:
+            raise ValueError("Embedding length mismatch across rows.")
+
+    if embedding_dim is None:
+        embedding_dim = inferred_dim
+
+    if embedding_dim is None:
+        raise ValueError("embedding_dim is required when writing an empty embedding CSV.")
+    if embedding_dim < 1:
+        raise ValueError("embedding_dim must be a positive integer.")
+
+    for row in rows:
+        if len(row.get("embedding", [])) != embedding_dim:
             raise ValueError("Embedding length mismatch across rows.")
 
     fieldnames = ["sample_id", "state", "class_name", "pixel_count"] + [
@@ -126,9 +197,8 @@ def export_group_geometry(
     group: str,
     checkpoint_path: Path | str,
 ) -> tuple[Path, Path]:
+    _validate_geometry_export_config(config)
     geometry_config = config.get("geometry", {})
-    if not isinstance(geometry_config, dict):
-        raise ValueError("config.geometry must be a mapping when provided.")
 
     class_values = _resolve_class_values(config)
     include_classes = list(geometry_config.get("include_classes", class_values.keys()))
@@ -150,7 +220,12 @@ def export_group_geometry(
         class_values=class_values,
         sample_ids=None,
     )
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, **loader_kwargs)
+
+    def _build_loader(*, num_workers_override: int | None) -> DataLoader:
+        effective_kwargs = dict(loader_kwargs)
+        if num_workers_override is not None:
+            effective_kwargs["num_workers"] = int(num_workers_override)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False, **effective_kwargs)
 
     model = build_segmentation_model(
         encoder_name=config["model"]["encoder_name"],
@@ -170,20 +245,35 @@ def export_group_geometry(
     _load_checkpoint_into_model(model, Path(checkpoint_path), device)
     model.eval()
 
-    all_rows: list[dict[str, Any]] = []
-    with torch.no_grad():
-        for batch in loader:
-            model_output = model(batch["image"].float().to(device))
-            all_rows.extend(
-                build_embedding_rows(
-                    model_output=model_output,
-                    mask=batch["mask"].to(device),
-                    sample_ids=list(batch["sample_id"]),
-                    include_classes=include_classes,
-                    class_values=class_values,
-                    min_mask_pixels=min_mask_pixels,
+    def _collect_rows(loader: DataLoader) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        with torch.no_grad():
+            for batch in loader:
+                model_output = model(batch["image"].float().to(device))
+                rows.extend(
+                    build_embedding_rows(
+                        model_output=model_output,
+                        mask=batch["mask"].to(device),
+                        sample_ids=list(batch["sample_id"]),
+                        include_classes=include_classes,
+                        class_values=class_values,
+                        min_mask_pixels=min_mask_pixels,
+                    )
                 )
-            )
+        return rows
+
+    configured_workers = int(loader_kwargs.get("num_workers", 0))
+    loader = _build_loader(num_workers_override=None)
+    try:
+        all_rows = _collect_rows(loader)
+    except PermissionError as exc:
+        if (
+            configured_workers > 0
+            and _is_known_windows_dataloader_worker_permission_error(exc)
+        ):
+            all_rows = _collect_rows(_build_loader(num_workers_override=0))
+        else:
+            raise
 
     geometry_dir = ensure_dir(
         Path(config["paths"]["artifacts_dir"])
@@ -192,13 +282,16 @@ def export_group_geometry(
     )
     pre_path = geometry_dir / "pre_adapter_embeddings.csv"
     post_path = geometry_dir / "post_adapter_embeddings.csv"
+    embedding_dim = int(config["model"]["bottleneck_channels"])
 
     write_embedding_csv(
         [row for row in all_rows if row["state"] == "pre_adapter"],
         pre_path,
+        embedding_dim=embedding_dim,
     )
     write_embedding_csv(
         [row for row in all_rows if row["state"] == "post_adapter"],
         post_path,
+        embedding_dim=embedding_dim,
     )
     return pre_path, post_path
