@@ -187,7 +187,6 @@ def export_group_geometry(
 
     geometry_dir = ensure_dir(
         Path(config["paths"]["artifacts_dir"])
-        / "low_data"
         / f"group_{group.lower()}"
         / "geometry"
     )

@@ -269,8 +269,8 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
         checkpoint_path=checkpoint_path,
     )
 
-    assert pre_path == tmp_path / "artifacts" / "low_data" / "group_b" / "geometry" / "pre_adapter_embeddings.csv"
-    assert post_path == tmp_path / "artifacts" / "low_data" / "group_b" / "geometry" / "post_adapter_embeddings.csv"
+    assert pre_path == tmp_path / "artifacts" / "group_b" / "geometry" / "pre_adapter_embeddings.csv"
+    assert post_path == tmp_path / "artifacts" / "group_b" / "geometry" / "post_adapter_embeddings.csv"
     assert pre_path.exists()
     assert post_path.exists()
 
