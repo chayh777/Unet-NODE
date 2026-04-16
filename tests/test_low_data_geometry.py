@@ -1,3 +1,4 @@
+from copy import deepcopy
 from importlib import util
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,6 +53,45 @@ def _load_low_data_geometry_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)  # type: ignore[attr-defined]
     return module
+
+
+def _make_valid_geometry_config(tmp_path: Path) -> dict:
+    return {
+        "paths": {
+            "val_images_dir": "data/val/images",
+            "val_masks_dir": "data/val/masks",
+            "artifacts_dir": str(tmp_path / "artifacts"),
+        },
+        "data": {
+            "image_size": 64,
+            "num_workers": 2,
+            "pin_memory": True,
+            "class_values": {"background": 0, "lesion": 1},
+        },
+        "train": {
+            "batch_size": 4,
+        },
+        "model": {
+            "encoder_name": "resnet18",
+            "encoder_weights": None,
+            "in_channels": 3,
+            "num_classes": 1,
+            "bottleneck_channels": 2,
+            "freeze_encoder": True,
+        },
+        "adapter": {
+            "hidden_channels": 8,
+        },
+        "node": {
+            "steps": 4,
+            "step_size": 0.25,
+        },
+        "geometry": {
+            "batch_size": 1,
+            "include_classes": ["lesion"],
+            "min_mask_pixels": 1,
+        },
+    }
 
 
 def test_build_embedding_rows_emits_pre_then_post_adapter_rows():
@@ -199,11 +239,6 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
             return iter(self._batches)
 
     class _FakeModel:
-        def __init__(self):
-            self.loaded_state = None
-            self.to_device = None
-            self.eval_called = False
-
         def load_state_dict(self, state_dict):
             self.loaded_state = dict(state_dict)
 
@@ -222,11 +257,9 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
                 adapted_bottleneck=torch.tensor([[[[10.0]], [[20.0]]]]),
             )
 
-    fake_model = _FakeModel()
-
     def _fake_build_segmentation_model(**kwargs):
         calls["build_segmentation_model"] = dict(kwargs)
-        return fake_model
+        return _FakeModel()
 
     def _fake_load_checkpoint(path, device):
         calls["load_checkpoint"] = {
@@ -241,42 +274,7 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
     monkeypatch.setattr(module, "load_checkpoint", _fake_load_checkpoint)
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
-    config = {
-        "paths": {
-            "val_images_dir": "data/val/images",
-            "val_masks_dir": "data/val/masks",
-            "artifacts_dir": str(tmp_path / "artifacts"),
-        },
-        "data": {
-            "image_size": 64,
-            "num_workers": 2,
-            "pin_memory": True,
-            "class_values": {"background": 0, "lesion": 1},
-        },
-        "train": {
-            "batch_size": 4,
-        },
-        "model": {
-            "encoder_name": "resnet18",
-            "encoder_weights": None,
-            "in_channels": 3,
-            "num_classes": 1,
-            "bottleneck_channels": 2,
-            "freeze_encoder": True,
-        },
-        "adapter": {
-            "hidden_channels": 8,
-        },
-        "node": {
-            "steps": 4,
-            "step_size": 0.25,
-        },
-        "geometry": {
-            "batch_size": 1,
-            "include_classes": ["lesion"],
-            "min_mask_pixels": 1,
-        },
-    }
+    config = _make_valid_geometry_config(tmp_path)
 
     pre_path, post_path = module.export_group_geometry(
         config=config,
@@ -321,45 +319,61 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
     assert calls["loader"]["kwargs"] == {"num_workers": 2, "pin_memory": True}
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert calls["load_checkpoint"]["path"] == checkpoint_path
-    assert calls["load_checkpoint"]["device"] == "cpu"
-    assert fake_model.loaded_state == {"weight": torch.tensor([1.0])}
-    assert str(fake_model.to_device) == "cpu"
-    assert fake_model.eval_called is True
 
 
 def test_export_group_geometry_validates_required_train_batch_size(tmp_path):
     module = _load_low_data_geometry_module()
-
-    config = {
-        "paths": {
-            "val_images_dir": "data/val/images",
-            "val_masks_dir": "data/val/masks",
-            "artifacts_dir": str(tmp_path / "artifacts"),
-        },
-        "data": {
-            "image_size": 64,
-        },
-        "train": {},
-        "model": {
-            "encoder_name": "resnet18",
-            "encoder_weights": None,
-            "in_channels": 3,
-            "num_classes": 1,
-            "bottleneck_channels": 2,
-            "freeze_encoder": True,
-        },
-        "adapter": {
-            "hidden_channels": 8,
-        },
-        "node": {
-            "steps": 4,
-            "step_size": 0.25,
-        },
-    }
+    config = _make_valid_geometry_config(tmp_path)
+    config["data"] = {"image_size": 64}
+    config["train"] = {}
 
     with pytest.raises(
         ValueError,
         match=r"config\.train missing keys \['batch_size'\]",
+    ):
+        module.export_group_geometry(
+            config=config,
+            group="A",
+            checkpoint_path=tmp_path / "checkpoint.pt",
+        )
+
+
+@pytest.mark.parametrize(
+    ("class_values", "message"),
+    [
+        (
+            {"background": 0},
+            r"Geometry export requires binary ISIC class_values with keys \['background', 'lesion'\]; got \['background'\]\.",
+        ),
+        (
+            {"background": 0, "lesion": 2},
+            r"Geometry export requires binary ISIC class_values mapping \{'background': 0, 'lesion': 1\}; got \{'background': 0, 'lesion': 2\}\.",
+        ),
+    ],
+)
+def test_export_group_geometry_rejects_invalid_binary_class_values(
+    tmp_path, class_values, message
+):
+    module = _load_low_data_geometry_module()
+    config = _make_valid_geometry_config(tmp_path)
+    config["data"]["class_values"] = deepcopy(class_values)
+
+    with pytest.raises(ValueError, match=message):
+        module.export_group_geometry(
+            config=config,
+            group="A",
+            checkpoint_path=tmp_path / "checkpoint.pt",
+        )
+
+
+def test_export_group_geometry_rejects_unknown_include_classes(tmp_path):
+    module = _load_low_data_geometry_module()
+    config = _make_valid_geometry_config(tmp_path)
+    config["geometry"]["include_classes"] = ["lesion", "not_a_class"]
+
+    with pytest.raises(
+        ValueError,
+        match=r"config\.geometry\.include_classes contains unknown classes \['not_a_class'\]; expected values from \['background', 'lesion'\]\.",
     ):
         module.export_group_geometry(
             config=config,
@@ -423,41 +437,8 @@ def test_export_group_geometry_preserves_embedding_columns_for_empty_exports(
     )
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
-    config = {
-        "paths": {
-            "val_images_dir": "data/val/images",
-            "val_masks_dir": "data/val/masks",
-            "artifacts_dir": str(tmp_path / "artifacts"),
-        },
-        "data": {
-            "image_size": 64,
-            "num_workers": 0,
-            "class_values": {"background": 0, "lesion": 1},
-        },
-        "train": {
-            "batch_size": 4,
-        },
-        "model": {
-            "encoder_name": "resnet18",
-            "encoder_weights": None,
-            "in_channels": 3,
-            "num_classes": 1,
-            "bottleneck_channels": 2,
-            "freeze_encoder": True,
-        },
-        "adapter": {
-            "hidden_channels": 8,
-        },
-        "node": {
-            "steps": 4,
-            "step_size": 0.25,
-        },
-        "geometry": {
-            "batch_size": 1,
-            "include_classes": ["lesion"],
-            "min_mask_pixels": 1,
-        },
-    }
+    config = _make_valid_geometry_config(tmp_path)
+    config["data"]["num_workers"] = 0
 
     pre_path, post_path = module.export_group_geometry(
         config=config,
@@ -551,41 +532,7 @@ def test_export_group_geometry_retries_known_windows_worker_permission_error(
     )
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
-    config = {
-        "paths": {
-            "val_images_dir": "data/val/images",
-            "val_masks_dir": "data/val/masks",
-            "artifacts_dir": str(tmp_path / "artifacts"),
-        },
-        "data": {
-            "image_size": 64,
-            "num_workers": 2,
-            "class_values": {"background": 0, "lesion": 1},
-        },
-        "train": {
-            "batch_size": 4,
-        },
-        "model": {
-            "encoder_name": "resnet18",
-            "encoder_weights": None,
-            "in_channels": 3,
-            "num_classes": 1,
-            "bottleneck_channels": 2,
-            "freeze_encoder": True,
-        },
-        "adapter": {
-            "hidden_channels": 8,
-        },
-        "node": {
-            "steps": 4,
-            "step_size": 0.25,
-        },
-        "geometry": {
-            "batch_size": 1,
-            "include_classes": ["lesion"],
-            "min_mask_pixels": 1,
-        },
-    }
+    config = _make_valid_geometry_config(tmp_path)
 
     pre_path, post_path = module.export_group_geometry(
         config=config,

@@ -16,6 +16,8 @@ from src.features.bottleneck_pooling import pool_class_embeddings
 from src.models.segmentation_model import build_segmentation_model
 from src.utils.io import ensure_dir, load_checkpoint
 
+_ISIC_BINARY_CLASS_VALUES = {"background": 0, "lesion": 1}
+
 
 def _normalize_state_dict(raw_state: Any) -> dict[str, Any]:
     if isinstance(raw_state, dict):
@@ -49,8 +51,20 @@ def _resolve_class_values(config: dict[str, Any]) -> dict[str, int]:
             class_values = section["class_values"]
             if not isinstance(class_values, dict) or not class_values:
                 raise ValueError(f"config.{section_name}.class_values must be a non-empty mapping.")
-            return {str(name): int(value) for name, value in class_values.items()}
-    return {"background": 0, "lesion": 1}
+            normalized = {str(name): int(value) for name, value in class_values.items()}
+            expected_names = sorted(_ISIC_BINARY_CLASS_VALUES)
+            if sorted(normalized) != expected_names:
+                raise ValueError(
+                    "Geometry export requires binary ISIC class_values with keys "
+                    f"{expected_names}; got {sorted(normalized)}."
+                )
+            if normalized != _ISIC_BINARY_CLASS_VALUES:
+                raise ValueError(
+                    "Geometry export requires binary ISIC class_values mapping "
+                    f"{_ISIC_BINARY_CLASS_VALUES}; got {normalized}."
+                )
+            return normalized
+    return dict(_ISIC_BINARY_CLASS_VALUES)
 
 
 def _require_mapping(config: dict[str, Any], key: str, context: str) -> dict[str, Any]:
@@ -102,6 +116,21 @@ def _validate_geometry_export_config(config: dict[str, Any]) -> None:
 
     if "geometry" in config and not isinstance(config["geometry"], dict):
         raise ValueError("config.geometry must be a mapping when provided.")
+
+
+def _resolve_include_classes(
+    geometry_config: dict[str, Any],
+    class_values: dict[str, int],
+) -> list[str]:
+    include_classes = geometry_config.get("include_classes", class_values.keys())
+    resolved = [str(name) for name in include_classes]
+    missing = sorted({name for name in resolved if name not in class_values})
+    if missing:
+        raise ValueError(
+            "config.geometry.include_classes contains unknown classes "
+            f"{missing}; expected values from {sorted(class_values)}."
+        )
+    return resolved
 
 
 def build_embedding_rows(
@@ -201,7 +230,7 @@ def export_group_geometry(
     geometry_config = config.get("geometry", {})
 
     class_values = _resolve_class_values(config)
-    include_classes = list(geometry_config.get("include_classes", class_values.keys()))
+    include_classes = _resolve_include_classes(geometry_config, class_values)
     min_mask_pixels = int(geometry_config.get("min_mask_pixels", 1))
     batch_size = int(geometry_config.get("batch_size", config["train"]["batch_size"]))
 
