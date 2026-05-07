@@ -61,10 +61,68 @@ def test_conv_adapter_preserves_shape():
     assert tuple(y.shape) == (2, 32, 8, 8)
 
 
+def test_conv_adapter_zero_last_layer_initializes_final_conv_to_zero():
+    import torch.nn as nn
+
+    model = ConvBottleneckAdapter(
+        channels=32,
+        hidden_channels=16,
+        init="zero_last_layer",
+    )
+    convs = [m for m in model.modules() if isinstance(m, nn.Conv2d)]
+
+    assert len(convs) == 2
+    assert torch.count_nonzero(convs[0].weight).item() > 0
+    assert torch.count_nonzero(convs[-1].weight).item() == 0
+    assert convs[-1].bias is not None
+    assert torch.count_nonzero(convs[-1].bias).item() == 0
+
+
+def test_conv_adapter_invalid_init_raises_clear_error():
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported adapter init"):
+        ConvBottleneckAdapter(channels=32, hidden_channels=16, init="unknown")
+
+
 def test_node_adapter_preserves_shape():
     x = torch.randn(2, 32, 8, 8)
     y = NODEAdapter(channels=32, hidden_channels=32, steps=4, step_size=0.25)(x)
     assert tuple(y.shape) == (2, 32, 8, 8)
+
+
+def test_node_adapter_zero_last_layer_initializes_vector_field_final_conv_to_zero():
+    import torch.nn as nn
+
+    model = NODEAdapter(
+        channels=32,
+        hidden_channels=16,
+        steps=4,
+        step_size=0.25,
+        init="zero_last_layer",
+    )
+    convs = [m for m in model.func.modules() if isinstance(m, nn.Conv2d)]
+
+    assert len(convs) == 2
+    assert torch.count_nonzero(convs[0].weight).item() > 0
+    assert torch.count_nonzero(convs[-1].weight).item() == 0
+    assert convs[-1].bias is not None
+    assert torch.count_nonzero(convs[-1].bias).item() == 0
+
+
+def test_node_adapter_zero_last_layer_starts_as_identity_flow():
+    x = torch.randn(2, 32, 8, 8)
+    model = NODEAdapter(
+        channels=32,
+        hidden_channels=16,
+        steps=4,
+        step_size=0.25,
+        init="zero_last_layer",
+    )
+
+    y = model(x)
+
+    assert torch.allclose(y, x, atol=1e-6)
 
 
 def test_node_adapter_uses_stateless_batchnorm():

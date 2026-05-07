@@ -1,22 +1,42 @@
 import torch
 import torch.nn as nn
 
-from .adapters import build_conv_bottleneck_block
+from .adapters import AdapterInit, build_conv_bottleneck_block
 
 
 class ODEFunction(nn.Module):
-    def __init__(self, channels: int, hidden_channels: int) -> None:
+    def __init__(
+        self,
+        channels: int,
+        hidden_channels: int,
+        init: AdapterInit = "default",
+    ) -> None:
         super().__init__()
-        self.net = build_conv_bottleneck_block(channels=channels, hidden_channels=hidden_channels)
+        self.net = build_conv_bottleneck_block(
+            channels=channels,
+            hidden_channels=hidden_channels,
+            init=init,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
 
 class NODEAdapter(nn.Module):
-    def __init__(self, channels: int, hidden_channels: int, steps: int, step_size: float) -> None:
+    def __init__(
+        self,
+        channels: int,
+        hidden_channels: int,
+        steps: int,
+        step_size: float,
+        init: AdapterInit = "default",
+    ) -> None:
         super().__init__()
-        self.func = ODEFunction(channels=channels, hidden_channels=hidden_channels)
+        self.func = ODEFunction(
+            channels=channels,
+            hidden_channels=hidden_channels,
+            init=init,
+        )
         self.steps = steps
         self.step_size = step_size
 
