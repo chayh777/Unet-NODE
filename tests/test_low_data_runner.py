@@ -4,6 +4,8 @@ from types import ModuleType
 import hashlib
 import sys
 
+import torch
+
 
 def _ensure_package(name: str, package_path: Path) -> None:
     if name in sys.modules:
@@ -64,6 +66,30 @@ def test_build_segmentation_model_freezes_encoder():
     ]
     assert encoder_flags
     assert all(flag is False for flag in encoder_flags)
+
+
+def test_build_segmentation_model_passes_zero_last_init_to_node_adapter():
+    import torch.nn as nn
+
+    model = build_segmentation_model(
+        encoder_name="resnet18",
+        encoder_weights=None,
+        in_channels=3,
+        num_classes=1,
+        adapter_type="node",
+        bottleneck_channels=32,
+        adapter_hidden_channels=16,
+        freeze_encoder=True,
+        node_steps=4,
+        node_step_size=0.25,
+        adapter_init="zero_last_layer",
+    )
+    convs = [m for m in model.adapter.func.modules() if isinstance(m, nn.Conv2d)]
+
+    assert len(convs) == 2
+    assert torch.count_nonzero(convs[-1].weight).item() == 0
+    assert convs[-1].bias is not None
+    assert torch.count_nonzero(convs[-1].bias).item() == 0
 
 
 def _ensure_src_experiments_importable() -> None:
@@ -206,6 +232,7 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
                 "  freeze_encoder: true",
                 "adapter:",
                 "  hidden_channels: 8",
+                "  init: zero_last_layer",
                 "node:",
                 "  steps: 4",
                 "  step_size: 0.25",
@@ -337,8 +364,60 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     assert calls["split_parent_exists"] is True
 
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
+    assert calls["build_segmentation_model"]["adapter_init"] == "zero_last_layer"
     assert Path(calls["fit"]["output_dir"]).name == "group_b"
     assert calls["output_dir_exists"] is True
+
+
+def test_run_group_rejects_unknown_adapter_init(tmp_path):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "  init: unsupported",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    from src.experiments.low_data_runner import run_group
+
+    try:
+        run_group(config_path, "C")
+        assert False, "Expected invalid adapter.init to raise ValueError"
+    except ValueError as exc:
+        assert "adapter.init" in str(exc)
+        assert "zero_last_layer" in str(exc)
 
 
 def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloader_permission_error(

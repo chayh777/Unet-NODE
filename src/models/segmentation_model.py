@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .adapters import ConvBottleneckAdapter, IdentityAdapter
+from .adapters import AdapterInit, ConvBottleneckAdapter, IdentityAdapter
 from .node_adapter import NODEAdapter
 
 
@@ -129,6 +129,7 @@ class SegmentationModel(nn.Module):
         freeze_encoder: bool,
         node_steps: int,
         node_step_size: float,
+        adapter_init: AdapterInit = "default",
     ) -> None:
         super().__init__()
         allowed_weights = {"imagenet", None}
@@ -156,7 +157,9 @@ class SegmentationModel(nn.Module):
             self.adapter = IdentityAdapter()
         elif adapter_type == "conv":
             self.adapter = ConvBottleneckAdapter(
-                channels=bottleneck_channels, hidden_channels=adapter_hidden_channels
+                channels=bottleneck_channels,
+                hidden_channels=adapter_hidden_channels,
+                init=adapter_init,
             )
         elif adapter_type == "node":
             self.adapter = NODEAdapter(
@@ -164,6 +167,7 @@ class SegmentationModel(nn.Module):
                 hidden_channels=adapter_hidden_channels,
                 steps=node_steps,
                 step_size=node_step_size,
+                init=adapter_init,
             )
         else:
             raise ValueError(f"Unknown adapter_type: {adapter_type}")

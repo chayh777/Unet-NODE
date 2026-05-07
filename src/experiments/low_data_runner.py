@@ -205,6 +205,19 @@ def _validate_low_data_config(config: dict[str, Any]) -> None:
     _require_keys(node, ["steps", "step_size"], "config.node")
 
 
+def _resolve_adapter_init(config: dict[str, Any]) -> str:
+    adapter = config.get("adapter", {})
+    if not isinstance(adapter, dict):
+        return "default"
+    value = adapter.get("init", "default")
+    if value not in {"default", "zero_last_layer"}:
+        raise ValueError(
+            "config.adapter.init must be one of ['default', 'zero_last_layer']; "
+            f"got {value!r}."
+        )
+    return str(value)
+
+
 def resolve_group_adapter(group: str) -> str:
     """
     Map ablation group to adapter type.
@@ -233,6 +246,7 @@ def run_group(config_path: str | Path, group: str):
     config = load_config(config_path)
     _validate_low_data_config(config)
     adapter_type = resolve_group_adapter(group)
+    adapter_init = _resolve_adapter_init(config)
 
     # Local imports keep module import lightweight; validation happens before any heavy imports.
     import torch
@@ -311,6 +325,7 @@ def run_group(config_path: str | Path, group: str):
         freeze_encoder=bool(config["model"]["freeze_encoder"]),
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        adapter_init=adapter_init,
     )
 
     trainable_params = [
