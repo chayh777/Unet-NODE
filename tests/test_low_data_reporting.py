@@ -7,6 +7,7 @@ import sys
 from types import ModuleType
 
 import pandas as pd
+import pytest
 
 
 def _ensure_package(name: str, package_path: Path) -> None:
@@ -128,9 +129,39 @@ def test_collect_group_final_metrics_reads_best_val_dice_and_best_row_val_iou(
         "best_epoch": 2,
         "best_val_dice": 0.72,
         "best_val_iou": 0.61,
+        "final_val_dice": 0.72,
+        "peak_final_gap": 0.0,
         "epochs_ran": 2,
         "best_checkpoint": "group_b/best.pt",
     }
+
+
+def test_collect_group_final_metrics_includes_final_dice_and_peak_final_gap(tmp_path: Path) -> None:
+    group_dir = tmp_path / "group_c"
+    group_dir.mkdir(parents=True)
+    (group_dir / "history.csv").write_text(
+        "\n".join(
+            [
+                "epoch,train_loss,val_loss,val_dice,val_iou",
+                "1,1.0,0.9,0.70,0.54",
+                "2,0.8,0.7,0.78,0.65",
+                "3,0.7,0.8,0.75,0.61",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (group_dir / "metrics.json").write_text(
+        '{"best_val_dice": 0.78, "epochs_ran": 3, "best_checkpoint": "best.pt"}',
+        encoding="utf-8",
+    )
+
+    from src.analysis.low_data_reporting import collect_group_final_metrics
+
+    row = collect_group_final_metrics(tmp_path, "C")
+
+    assert row["final_val_dice"] == 0.75
+    assert row["peak_final_gap"] == pytest.approx(0.03)
 
 
 def test_build_history_table_combines_groups(tmp_path: Path) -> None:
@@ -212,12 +243,24 @@ def test_build_final_metrics_table_combines_groups(tmp_path: Path) -> None:
 
     table = module.build_final_metrics_table(artifacts_dir=artifacts_dir, groups=["A", "B"])
 
+    assert list(table.columns) == [
+        "group",
+        "best_epoch",
+        "best_val_dice",
+        "best_val_iou",
+        "final_val_dice",
+        "peak_final_gap",
+        "epochs_ran",
+        "best_checkpoint",
+    ]
     assert table.to_dict("records") == [
         {
             "group": "A",
             "best_epoch": 1,
             "best_val_dice": 0.5,
             "best_val_iou": 0.4,
+            "final_val_dice": 0.5,
+            "peak_final_gap": 0.0,
             "epochs_ran": 1,
             "best_checkpoint": "a.pt",
         },
@@ -226,6 +269,8 @@ def test_build_final_metrics_table_combines_groups(tmp_path: Path) -> None:
             "best_epoch": 2,
             "best_val_dice": 0.72,
             "best_val_iou": 0.61,
+            "final_val_dice": 0.72,
+            "peak_final_gap": 0.0,
             "epochs_ran": 2,
             "best_checkpoint": "b.pt",
         },

@@ -46,12 +46,17 @@ def collect_group_final_metrics(artifacts_dir: str | Path, group: str) -> dict[s
 
     best_idx = (history["val_dice"] - float(best_val_dice)).abs().idxmin()
     best_row = history.loc[int(best_idx)]
+    final_row = history.sort_values("epoch").iloc[-1]
+    final_val_dice = float(final_row["val_dice"])
+    peak_final_gap = float(best_val_dice) - final_val_dice
 
     return {
         "group": group,
         "best_epoch": int(best_row["epoch"]),
         "best_val_dice": float(best_val_dice),
         "best_val_iou": float(best_row["val_iou"]),
+        "final_val_dice": final_val_dice,
+        "peak_final_gap": peak_final_gap,
         "epochs_ran": metrics.get("epochs_ran"),
         "best_checkpoint": metrics.get("best_checkpoint"),
     }
@@ -77,6 +82,8 @@ def build_final_metrics_table(
             "best_epoch",
             "best_val_dice",
             "best_val_iou",
+            "final_val_dice",
+            "peak_final_gap",
             "epochs_ran",
             "best_checkpoint",
         ],
