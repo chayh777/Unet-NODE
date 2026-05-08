@@ -1,0 +1,46 @@
+seed: 42
+paths:
+  train_images_dir: data/train/images
+  train_masks_dir: data/train/labels
+  val_images_dir: data/validation/images
+  val_masks_dir: data/validation/labels
+  artifacts_dir: artifacts/low_data_followup/c_zero_last
+data:
+  image_size: 256
+  train_ratio: 0.1
+  num_workers: 4
+  pin_memory: true
+model:
+  encoder_name: resnet34
+  encoder_weights: imagenet
+  in_channels: 3
+  num_classes: 1
+  bottleneck_channels: 512
+  freeze_encoder: true
+adapter:
+  type: node
+  hidden_channels: 512
+  init: zero_last_layer
+node:
+  solver: euler
+  steps: 4
+  step_size: 0.25
+train:
+  batch_size: 8
+  epochs: 50
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  early_stopping_patience: 8
+geometry:
+  include_classes:
+    - background
+    - lesion
+  min_mask_pixels: 1
+geometry_plot:
+  pca_components: 8
+  umap_neighbors: 15
+  umap_min_dist: 0.1
+  random_state: 42
+  alpha: 0.7
+  point_size: 18
+  dpi: 150

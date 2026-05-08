@@ -153,6 +153,63 @@ def test_load_config_parses_yaml(tmp_path):
     assert config["seed"] == 123
 
 
+def test_node_followup_configs_parse_and_use_expected_adapter_init():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/isic2018_low_data_node_c_zero_last.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/c_zero_last",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 4,
+            "step_size": 0.25,
+        },
+        "configs/experiments/isic2018_low_data_node_c_zero_last_small_step.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/c_zero_last_small_step",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 4,
+            "step_size": 0.125,
+        },
+        "configs/experiments/isic2018_low_data_node_c_fine_integration.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/c_fine_integration",
+            "init": "default",
+            "adapter_type": "node",
+            "steps": 8,
+            "step_size": 0.125,
+        },
+        "configs/experiments/isic2018_low_data_node_c_zero_last_fine_integration.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/c_zero_last_fine_integration",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 8,
+            "step_size": 0.125,
+        },
+        "configs/experiments/isic2018_low_data_conv_b_zero_last.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/b_zero_last",
+            "init": "zero_last_layer",
+            "adapter_type": "conv",
+            "steps": 4,
+            "step_size": 0.25,
+        },
+        "configs/experiments/isic2018_low_data_node_c_zero_last_steps1.yaml": {
+            "artifacts_dir": "artifacts/low_data_followup/c_zero_last_steps1",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 1,
+            "step_size": 1.0,
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        assert config["paths"]["artifacts_dir"] == values["artifacts_dir"]
+        assert config["adapter"].get("init", "default") == values["init"]
+        assert config["adapter"].get("type", "node") == values["adapter_type"]
+        assert int(config["node"]["steps"]) == values["steps"]
+        assert float(config["node"]["step_size"]) == values["step_size"]
+
+
 def test_load_config_raises_clear_error_for_malformed_yaml(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("seed: [1,2\n", encoding="utf-8")
