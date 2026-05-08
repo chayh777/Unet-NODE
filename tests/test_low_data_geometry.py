@@ -275,6 +275,7 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
     config = _make_valid_geometry_config(tmp_path)
+    config["adapter"]["init"] = "zero_last_layer"
 
     pre_path, post_path = module.export_group_geometry(
         config=config,
@@ -318,6 +319,7 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
     assert calls["loader"]["shuffle"] is False
     assert calls["loader"]["kwargs"] == {"num_workers": 2, "pin_memory": True}
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
+    assert calls["build_segmentation_model"]["adapter_init"] == "zero_last_layer"
     assert calls["load_checkpoint"]["path"] == checkpoint_path
 
 

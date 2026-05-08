@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from src.data.isic2018 import ISIC2018Dataset
 from src.experiments.low_data_runner import (
     _is_known_windows_dataloader_worker_permission_error,
+    _resolve_adapter_init,
     resolve_group_adapter,
 )
 from src.features.bottleneck_pooling import pool_class_embeddings
@@ -264,6 +265,7 @@ def export_group_geometry(
         adapter_type=resolve_group_adapter(group),
         bottleneck_channels=int(config["model"]["bottleneck_channels"]),
         adapter_hidden_channels=int(config["adapter"]["hidden_channels"]),
+        adapter_init=_resolve_adapter_init(config),
         freeze_encoder=bool(config["model"]["freeze_encoder"]),
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
