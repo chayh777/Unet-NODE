@@ -164,6 +164,33 @@ def test_collect_group_final_metrics_includes_final_dice_and_peak_final_gap(tmp_
     assert row["peak_final_gap"] == pytest.approx(0.03)
 
 
+def test_collect_group_final_metrics_uses_last_epoch_after_sorting(tmp_path):
+    group_dir = tmp_path / "group_c"
+    group_dir.mkdir(parents=True)
+    (group_dir / "history.csv").write_text(
+        "\n".join(
+            [
+                "epoch,train_loss,val_loss,val_dice,val_iou",
+                "3,0.7,0.8,0.75,0.61",
+                "1,1.0,0.9,0.70,0.54",
+                "2,0.8,0.7,0.78,0.65",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (group_dir / "metrics.json").write_text(
+        '{"best_val_dice": 0.78, "epochs_ran": 3, "best_checkpoint": "best.pt"}',
+        encoding="utf-8",
+    )
+
+    from src.analysis.low_data_reporting import collect_group_final_metrics
+
+    row = collect_group_final_metrics(tmp_path, "C")
+
+    assert row["final_val_dice"] == 0.75
+
+
 def test_build_history_table_combines_groups(tmp_path: Path) -> None:
     module = _load_low_data_reporting_module()
     artifacts_dir = tmp_path / "artifacts"
