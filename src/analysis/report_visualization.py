@@ -227,6 +227,7 @@ def _save_bar_with_points(
     ylabel: str,
     title: str,
     output_path: Path,
+    y_min: float | None = None,
 ) -> None:
     plt = _get_plotting_libs()
     order = _method_order([str(x) for x in summary["method"].tolist()])
@@ -253,6 +254,8 @@ def _save_bar_with_points(
     ax.set_ylabel(ylabel)
     ax.set_xticks(x_positions)
     ax.set_xticklabels(order, rotation=20, ha="right")
+    if y_min is not None:
+        ax.set_ylim(bottom=y_min)
     ax.grid(True, axis="y", alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
@@ -309,6 +312,7 @@ def save_multiseed_figures(*, runs: pd.DataFrame, summary: pd.DataFrame, output_
         ylabel="Best Dice",
         title="Multi-Seed Best Dice",
         output_path=output_dir / "multiseed_best_dice.png",
+        y_min=0.7,
     )
     _save_bar_with_points(
         runs=runs,
@@ -319,6 +323,7 @@ def save_multiseed_figures(*, runs: pd.DataFrame, summary: pd.DataFrame, output_
         ylabel="Final Dice",
         title="Multi-Seed Final Dice",
         output_path=output_dir / "multiseed_final_dice.png",
+        y_min=0.7,
     )
     if "B-base" in set(runs["method"]):
         _save_delta_vs_b(runs, output_dir / "multiseed_delta_vs_b.png")

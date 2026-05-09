@@ -17,6 +17,7 @@ smoke_run/
 # Git worktrees (local dev)
 .worktrees/
 .merge_backups/
+.codex_context/
 
 # Local datasets
 /data/

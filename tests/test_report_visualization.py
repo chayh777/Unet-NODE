@@ -136,6 +136,94 @@ def test_save_multiseed_figures_writes_expected_pngs(tmp_path: Path) -> None:
     assert (tmp_path / "multiseed_delta_vs_b.png").exists()
 
 
+def test_save_multiseed_figures_sets_dice_axis_floor_to_point7(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.analysis.report_visualization as report_visualization
+
+    runs = pd.DataFrame(
+        [
+            {"method": "B-base", "seed": 0, "best_dice": 0.70, "final_dice": 0.68, "peak_final_gap": 0.02},
+            {"method": "C-zero-last-steps8", "seed": 0, "best_dice": 0.75, "final_dice": 0.73, "peak_final_gap": 0.02},
+        ]
+    )
+    summary = pd.DataFrame(
+        [
+            {"method": "B-base", "best_dice_mean": 0.71, "best_dice_std": 0.014, "final_dice_mean": 0.695, "final_dice_std": 0.021},
+            {"method": "C-zero-last-steps8", "best_dice_mean": 0.755, "best_dice_std": 0.007, "final_dice_mean": 0.735, "final_dice_std": 0.007},
+        ]
+    )
+
+    class FakeAxis:
+        def __init__(self) -> None:
+            self.ylim_bottoms: list[float | None] = []
+
+        def bar(self, *args, **kwargs) -> None:
+            return None
+
+        def scatter(self, *args, **kwargs) -> None:
+            return None
+
+        def set_title(self, *args, **kwargs) -> None:
+            return None
+
+        def set_ylabel(self, *args, **kwargs) -> None:
+            return None
+
+        def set_xticks(self, *args, **kwargs) -> None:
+            return None
+
+        def set_xticklabels(self, *args, **kwargs) -> None:
+            return None
+
+        def set_ylim(self, *, bottom=None, top=None) -> None:
+            self.ylim_bottoms.append(bottom)
+
+        def grid(self, *args, **kwargs) -> None:
+            return None
+
+        def plot(self, *args, **kwargs) -> None:
+            return None
+
+        def axhline(self, *args, **kwargs) -> None:
+            return None
+
+        def set_xlabel(self, *args, **kwargs) -> None:
+            return None
+
+        def legend(self, *args, **kwargs) -> None:
+            return None
+
+    class FakeFigure:
+        def tight_layout(self) -> None:
+            return None
+
+        def savefig(self, path: Path, dpi: int) -> None:
+            Path(path).touch()
+
+    class FakePlt:
+        def __init__(self) -> None:
+            self.axes: list[FakeAxis] = []
+
+        def subplots(self, *args, **kwargs):
+            if kwargs.get("sharex"):
+                axes = [FakeAxis(), FakeAxis()]
+                self.axes.extend(axes)
+                return FakeFigure(), axes
+            axis = FakeAxis()
+            self.axes.append(axis)
+            return FakeFigure(), axis
+
+        def close(self, fig) -> None:
+            return None
+
+    fake_plt = FakePlt()
+    monkeypatch.setattr(report_visualization, "_get_plotting_libs", lambda: fake_plt)
+
+    report_visualization.save_multiseed_figures(runs=runs, summary=summary, output_dir=tmp_path)
+
+    assert fake_plt.axes[0].ylim_bottoms == [0.7]
+    assert fake_plt.axes[1].ylim_bottoms == [0.7]
+
+
 def test_save_steps_ablation_figures_writes_expected_pngs(tmp_path: Path) -> None:
     from src.analysis.report_visualization import save_steps_ablation_figures
 
