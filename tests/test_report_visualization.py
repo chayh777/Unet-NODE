@@ -153,3 +153,47 @@ def test_save_steps_ablation_figures_writes_expected_pngs(tmp_path: Path) -> Non
     assert (tmp_path / "steps_best_dice.png").exists()
     assert (tmp_path / "steps_final_dice.png").exists()
     assert (tmp_path / "steps_peak_final_gap.png").exists()
+
+
+def test_write_report_visualizations_writes_tables_and_figures(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import write_report_visualizations
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed0" / "group_b",
+        best=0.70,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.68, "val_iou": 0.48},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "c_zero_last_fine_integration_seed0" / "group_c",
+        best=0.75,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.73, "val_iou": 0.55},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.75, "val_iou": 0.57},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data" / "group_c",
+        best=0.71,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.71, "val_iou": 0.51},
+        ],
+    )
+
+    output_dir = write_report_visualizations(
+        artifacts_dir=artifacts_dir,
+        output_dir=tmp_path / "report",
+    )
+
+    assert output_dir == tmp_path / "report"
+    assert (output_dir / "multiseed_summary.csv").exists()
+    assert (output_dir / "multiseed_method_summary.csv").exists()
+    assert (output_dir / "steps_ablation_summary.csv").exists()
+    assert (output_dir / "multiseed_best_dice.png").exists()
+    assert (output_dir / "multiseed_final_dice.png").exists()
+    assert (output_dir / "multiseed_delta_vs_b.png").exists()
+    assert (output_dir / "steps_best_dice.png").exists()

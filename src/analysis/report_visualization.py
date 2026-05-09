@@ -381,3 +381,28 @@ def save_steps_ablation_figures(*, table: pd.DataFrame, output_dir: str | Path) 
         title="Steps Ablation: Peak-Final Gap",
         output_path=output_dir / "steps_peak_final_gap.png",
     )
+
+
+def write_report_visualizations(
+    *,
+    artifacts_dir: str | Path = "artifacts",
+    output_dir: str | Path = "artifacts/report_figures",
+) -> Path:
+    artifacts_dir = Path(artifacts_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    multiseed_runs, multiseed_summary = build_multiseed_tables(artifacts_dir)
+    steps_table = build_steps_ablation_table(artifacts_dir)
+
+    multiseed_runs.to_csv(output_dir / "multiseed_summary.csv", index=False)
+    multiseed_summary.to_csv(output_dir / "multiseed_method_summary.csv", index=False)
+    steps_table.to_csv(output_dir / "steps_ablation_summary.csv", index=False)
+
+    save_multiseed_figures(
+        runs=multiseed_runs,
+        summary=multiseed_summary,
+        output_dir=output_dir,
+    )
+    save_steps_ablation_figures(table=steps_table, output_dir=output_dir)
+    return output_dir

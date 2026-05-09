@@ -165,3 +165,49 @@ def test_plot_low_data_summary_cli_passes_args_to_summary_writer(
         "artifacts_dir": tmp_path / "artifacts",
         "groups": ["A", "C"],
     }
+
+
+def test_plot_report_results_cli_passes_args_to_writer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_dir = repo_root / "src"
+    analysis_dir = src_dir / "analysis"
+
+    _ensure_package("src", src_dir)
+    _ensure_package("src.analysis", analysis_dir)
+
+    calls: dict[str, object] = {}
+    report_module = ModuleType("src.analysis.report_visualization")
+
+    def write_report_visualizations(*, artifacts_dir, output_dir):
+        calls["report"] = {
+            "artifacts_dir": Path(artifacts_dir),
+            "output_dir": Path(output_dir),
+        }
+        return Path(output_dir)
+
+    report_module.write_report_visualizations = write_report_visualizations
+    monkeypatch.setitem(sys.modules, "src.analysis.report_visualization", report_module)
+
+    module = _load_script_module(
+        "scripts.plot_report_results", "scripts/plot_report_results.py"
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "plot_report_results.py",
+            "--artifacts-dir",
+            str(tmp_path / "artifacts"),
+            "--output-dir",
+            str(tmp_path / "figures"),
+        ],
+    )
+
+    module.main()
+
+    assert calls["report"] == {
+        "artifacts_dir": tmp_path / "artifacts",
+        "output_dir": tmp_path / "figures",
+    }
