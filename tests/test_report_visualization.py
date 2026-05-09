@@ -51,3 +51,32 @@ def test_summarize_run_reads_best_final_and_gap(tmp_path: Path) -> None:
         "epochs_ran": 3,
         "root": str(root),
     }
+
+
+def test_build_multiseed_tables_collects_known_methods(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed0" / "group_b",
+        best=0.70,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.68, "val_iou": 0.48},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "c_zero_last_fine_integration_seed0" / "group_c",
+        best=0.75,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.73, "val_iou": 0.55},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.75, "val_iou": 0.57},
+        ],
+    )
+
+    runs, summary = build_multiseed_tables(artifacts_dir)
+
+    assert runs["method"].tolist() == ["B-base", "C-zero-last-steps8"]
+    assert runs["seed"].tolist() == [0, 0]
+    assert summary["method"].tolist() == ["B-base", "C-zero-last-steps8"]
+    assert summary.loc[summary["method"] == "C-zero-last-steps8", "best_dice_mean"].iloc[0] == 0.75
