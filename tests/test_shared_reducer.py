@@ -229,3 +229,83 @@ def test_save_side_by_side_scatter_uses_legend_labels_from_any_axis(monkeypatch,
             {"loc": "upper center", "ncol": 2},
         )
     ]
+
+
+def _make_group_geometry_csvs(tmp_path, group, pre_vals, post_vals):
+    geom_dir = tmp_path / f"group_{group.lower()}" / "geometry"
+    geom_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"sample_id": f"{group}_pre_{i}", "state": "pre_adapter", "class_name": "lesion",
+             "pixel_count": 4, "embedding_0000": v[0], "embedding_0001": v[1]}
+            for i, v in enumerate(pre_vals)
+        ]
+    ).to_csv(geom_dir / "pre_adapter_embeddings.csv", index=False)
+    pd.DataFrame(
+        [
+            {"sample_id": f"{group}_post_{i}", "state": "post_adapter", "class_name": "lesion",
+             "pixel_count": 4, "embedding_0000": v[0], "embedding_0001": v[1]}
+            for i, v in enumerate(post_vals)
+        ]
+    ).to_csv(geom_dir / "post_adapter_embeddings.csv", index=False)
+    return geom_dir
+
+
+def test_run_cross_group_geometry_plot_writes_all_outputs(tmp_path):
+    geom_a = _make_group_geometry_csvs(tmp_path, "A", [(0.0, 0.0), (0.1, 0.1)], [(0.0, 0.0), (0.1, 0.1)])
+    geom_b = _make_group_geometry_csvs(tmp_path, "B", [(1.0, 1.0), (1.1, 1.1)], [(2.0, 2.0), (2.1, 2.1)])
+    geom_c = _make_group_geometry_csvs(tmp_path, "C", [(5.0, 5.0), (5.1, 5.1)], [(8.0, 8.0), (8.1, 8.1)])
+
+    output_dir = tmp_path / "cross_group"
+    result = reduce_module.run_cross_group_geometry_plot(
+        group_geometry_dirs={"A": geom_a, "B": geom_b, "C": geom_c},
+        output_dir=output_dir,
+        pca_components=2,
+        umap_neighbors=2,
+        umap_min_dist=0.1,
+        random_state=42,
+        alpha=0.7,
+        point_size=20,
+        dpi=72,
+    )
+
+    assert result == output_dir
+    assert (output_dir / "cross_group_projection_points.csv").exists()
+    assert (output_dir / "cross_group_compactness.csv").exists()
+    assert (output_dir / "cross_group_scatter_by_state.png").exists()
+    assert (output_dir / "cross_group_scatter_by_group.png").exists()
+    assert (output_dir / "cross_group_compactness.png").exists()
+
+    proj = pd.read_csv(output_dir / "cross_group_projection_points.csv")
+    assert {"group", "state", "x", "y"}.issubset(proj.columns)
+    assert set(proj["group"]) == {"A", "B", "C"}
+    assert set(proj["state"]) == {"pre_adapter", "post_adapter"}
+
+    compact = pd.read_csv(output_dir / "cross_group_compactness.csv")
+    assert {"group", "state", "class_name", "mean_radius"}.issubset(compact.columns)
+    assert set(compact["group"]) == {"A", "B", "C"}
+
+
+def test_load_group_embeddings_raises_when_dir_empty(tmp_path):
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    try:
+        reduce_module._load_group_embeddings(empty_dir, "A")
+        assert False, "Expected FileNotFoundError"
+    except FileNotFoundError:
+        pass
+
+
+def test_cross_group_compactness_has_correct_structure():
+    df = pd.DataFrame(
+        [
+            {"group": "A", "state": "pre_adapter", "class_name": "lesion", "x": 0.0, "y": 0.0},
+            {"group": "A", "state": "pre_adapter", "class_name": "lesion", "x": 1.0, "y": 1.0},
+            {"group": "B", "state": "post_adapter", "class_name": "background", "x": 5.0, "y": 5.0},
+            {"group": "B", "state": "post_adapter", "class_name": "background", "x": 6.0, "y": 6.0},
+        ]
+    )
+    compact = reduce_module._cross_group_compactness(df)
+    assert {"group", "state", "class_name", "mean_radius"}.issubset(compact.columns)
+    assert len(compact) == 2
+    assert set(compact["group"]) == {"A", "B"}

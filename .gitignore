@@ -24,3 +24,6 @@ smoke_run/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Claude Code agent instructions (local only)
+CLAUDE.md

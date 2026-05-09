@@ -1,9 +1,19 @@
 from pathlib import Path
 import os
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
+
+if TYPE_CHECKING:
+    pass
+
+_GROUP_COLORS = {
+    "A": "#5470c6",
+    "B": "#ee8c30",
+    "C": "#3ba272",
+}
 
 
 def _get_plotting_libs():
@@ -354,6 +364,168 @@ def run_reduction_and_plot(
     compactness.to_csv(metrics_dir / "compactness_summary.csv", index=False)
     projected.to_csv(metrics_dir / "shared_projection_points.csv", index=False)
     return plots_dir, metrics_dir
+
+
+def _load_group_embeddings(geometry_dir: Path, group: str) -> pd.DataFrame:
+    pre_csv = Path(geometry_dir) / "pre_adapter_embeddings.csv"
+    post_csv = Path(geometry_dir) / "post_adapter_embeddings.csv"
+    dfs = []
+    for csv_path in (pre_csv, post_csv):
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            df["group"] = group
+            dfs.append(df)
+    if not dfs:
+        raise FileNotFoundError(f"No embedding CSVs found in {geometry_dir}")
+    return pd.concat(dfs, ignore_index=True)
+
+
+def _cross_group_compactness(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (group, state, class_name), grp in df.groupby(["group", "state", "class_name"]):
+        cx, cy = grp["x"].mean(), grp["y"].mean()
+        r = ((grp["x"] - cx) ** 2 + (grp["y"] - cy) ** 2).pow(0.5).mean()
+        rows.append({"group": group, "state": state, "class_name": class_name, "mean_radius": r})
+    return pd.DataFrame(rows)
+
+
+def _save_cross_group_scatter_by_state(df, output_path, alpha, point_size, dpi):
+    if df.empty:
+        return
+    plt, sns = _get_plotting_libs()
+    states = ["pre_adapter", "post_adapter"]
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharex=True, sharey=True)
+    palette = {g: c for g, c in _GROUP_COLORS.items() if g in df["group"].unique()}
+    class_markers = {"lesion": "o", "background": "s"}
+
+    for ax, state in zip(axes, states):
+        subset = df[df["state"] == state]
+        if subset.empty:
+            ax.set_title(f"{_state_title(state)}\n(no data)")
+            ax.set_axis_off()
+            continue
+        sns.scatterplot(
+            data=subset, x="x", y="y",
+            hue="group", style="class_name",
+            palette=palette, markers=class_markers,
+            alpha=alpha, s=point_size, edgecolor=None, ax=ax,
+        )
+        ax.set_title(_state_title(state))
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper center", ncol=max(1, len(labels)), bbox_to_anchor=(0.5, 1.04))
+            break
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _save_cross_group_scatter_by_group(df, groups, output_path, alpha, point_size, dpi):
+    if df.empty:
+        return
+    plt, sns = _get_plotting_libs()
+    groups = list(groups)
+    fig, axes = plt.subplots(1, len(groups), figsize=(6 * len(groups), 5), sharex=True, sharey=True)
+    if len(groups) == 1:
+        axes = [axes]
+
+    state_palette = {"pre_adapter": "#aaaaaa", "post_adapter": "#d84b4b"}
+    state_markers = {"pre_adapter": "o", "post_adapter": "s"}
+
+    for ax, group in zip(axes, groups):
+        subset = df[(df["group"] == group) & (df["class_name"] == "lesion")]
+        if subset.empty:
+            ax.set_title(f"Group {group}\n(no data)")
+            ax.set_axis_off()
+            continue
+        sns.scatterplot(
+            data=subset, x="x", y="y",
+            hue="state", style="state",
+            palette=state_palette, markers=state_markers,
+            alpha=alpha, s=point_size, edgecolor=None, ax=ax,
+        )
+        ax.set_title(f"Group {group} — lesion")
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper center", ncol=max(1, len(labels)))
+            break
+
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+
+
+def _save_cross_group_compactness_chart(compactness_df, output_path, dpi):
+    if compactness_df.empty:
+        return
+    plt, sns = _get_plotting_libs()
+    lesion_df = compactness_df[compactness_df["class_name"] == "lesion"].copy()
+    if lesion_df.empty:
+        return
+    lesion_df["label"] = (
+        lesion_df["state"]
+        .map({"pre_adapter": "Pre", "post_adapter": "Post"})
+        .fillna(lesion_df["state"])
+    )
+    fig, ax = plt.subplots(figsize=(7, 4))
+    sns.barplot(
+        data=lesion_df, x="group", y="mean_radius", hue="label",
+        palette={"Pre": "#aaaaaa", "Post": "#d84b4b"}, ax=ax,
+    )
+    ax.set_xlabel("Group")
+    ax.set_ylabel("Mean Radius (projected)")
+    ax.set_title("Lesion Embedding Compactness by Group")
+    ax.legend(title="State")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+
+
+def run_cross_group_geometry_plot(
+    group_geometry_dirs: dict,
+    output_dir: Path,
+    pca_components: int = 8,
+    umap_neighbors: int = 15,
+    umap_min_dist: float = 0.1,
+    random_state: int = 42,
+    alpha: float = 0.65,
+    point_size: float = 20,
+    dpi: int = 150,
+) -> Path:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    combined = pd.concat(
+        [_load_group_embeddings(geom_dir, group) for group, geom_dir in group_geometry_dirs.items()],
+        ignore_index=True,
+    )
+
+    projected = build_shared_projection(combined, pca_components, umap_neighbors, umap_min_dist, random_state)
+    projected.to_csv(output_dir / "cross_group_projection_points.csv", index=False)
+
+    compactness = _cross_group_compactness(projected)
+    compactness.to_csv(output_dir / "cross_group_compactness.csv", index=False)
+
+    _save_cross_group_scatter_by_state(
+        projected, output_dir / "cross_group_scatter_by_state.png", alpha, point_size, dpi,
+    )
+    _save_cross_group_scatter_by_group(
+        projected, group_geometry_dirs.keys(), output_dir / "cross_group_scatter_by_group.png", alpha, point_size, dpi,
+    )
+    _save_cross_group_compactness_chart(compactness, output_dir / "cross_group_compactness.png", dpi)
+
+    return output_dir
 
 
 def run_low_data_geometry_plot(

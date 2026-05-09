@@ -109,3 +109,125 @@ Interpretation notes:
 - For Group A, `pre_adapter` and `post_adapter` are still exported through the unified pipeline so the geometry contract stays consistent across groups.
 - Run geometry export only after the corresponding group's `best.pt` exists.
 - Run summary reporting only after the compared groups already contain `history.csv` and `metrics.json`.
+
+## Visualization
+
+Requires experiments to have been trained first (`run_low_data_experiment.py`). Scripts are independent and can be run in any order after the relevant checkpoints and artifacts exist.
+
+### 1. Segmentation prediction grid
+
+Shows input image, ground truth mask, and per-group predictions side by side for a random subset of validation samples.
+
+```bash
+python scripts/visualize_predictions.py \
+    --configs A:configs/experiments/isic2018_low_data_node.yaml \
+              B:configs/experiments/isic2018_low_data_node.yaml \
+              C:configs/experiments/isic2018_low_data_node.yaml \
+    --groups  A:A B:B C:C \
+    --n-samples 8 \
+    --output-dir artifacts/presentation/predictions
+```
+
+Outputs:
+- `artifacts/presentation/predictions/predictions_grid.png`
+
+### 2. Cross-group bottleneck geometry comparison
+
+Projects Group A / B / C bottleneck embeddings into a shared PCA + UMAP space. Requires geometry CSVs from `run_low_data_geometry.py` for each group.
+
+```bash
+python scripts/plot_cross_group_geometry.py \
+    --artifacts-dir artifacts/low_data \
+    --groups A B C
+```
+
+Outputs:
+- `artifacts/low_data/summary/cross_group_geometry/cross_group_scatter_by_state.png` — pre/post adapter panels, points coloured by group
+- `artifacts/low_data/summary/cross_group_geometry/cross_group_scatter_by_group.png` — per-group panels, pre vs post adapter coloured by state (lesion only)
+- `artifacts/low_data/summary/cross_group_geometry/cross_group_compactness.png` — lesion embedding compactness bar chart
+- `artifacts/low_data/summary/cross_group_geometry/cross_group_projection_points.csv`
+- `artifacts/low_data/summary/cross_group_geometry/cross_group_compactness.csv`
+
+### 3. NODE step ablation summary
+
+Grouped bar chart of best validation Dice / IoU across ODE step counts (2, 16) × initialisation strategies (default, zero-last). Reads directly from T1 ablation config YAMLs.
+
+```bash
+python scripts/plot_ablation_summary.py \
+    --configs configs/experiments/isic2018_low_data_node_c_steps2_t1.yaml \
+              configs/experiments/isic2018_low_data_node_c_steps16_t1.yaml \
+              configs/experiments/isic2018_low_data_node_c_zero_last_steps2_t1.yaml \
+              configs/experiments/isic2018_low_data_node_c_zero_last_steps16_t1.yaml \
+    --output-dir artifacts/low_data_followup/summary
+```
+
+Outputs:
+- `artifacts/low_data_followup/summary/ablation_summary.csv`
+- `artifacts/low_data_followup/summary/ablation_dice_bars.png`
+- `artifacts/low_data_followup/summary/ablation_iou_bars.png`
+
+### 4. Early convergence speed plot
+
+Zoomed val-Dice curves (first N epochs) and a bar chart showing how many epochs each group needs to reach 80 / 90 / 95 % of its own peak Dice. Highlights the Group C early-peak advantage story.
+
+Auto-generated alongside the other summary plots:
+
+```bash
+python scripts/plot_low_data_summary.py --artifacts-dir artifacts/low_data --groups A B C
+```
+
+Or as a standalone call with custom settings:
+
+```python
+from src.analysis.low_data_reporting import write_early_convergence_artifacts
+
+write_early_convergence_artifacts(
+    artifacts_dir="artifacts/low_data",
+    groups=["A", "B", "C"],
+    output_dir="artifacts/low_data/summary",   # defaults to summary/ if omitted
+    zoom_epochs=15,                             # x-axis limit for the curve plot
+    thresholds=(0.80, 0.90, 0.95),             # fractions of each group's peak Dice
+    dpi=150,
+)
+```
+
+Outputs (written to the same summary directory as the other plots):
+- `artifacts/low_data/summary/early_convergence_curve.png` — val-Dice line plot, zoomed to first `zoom_epochs` epochs
+- `artifacts/low_data/summary/epochs_to_threshold.png` — grouped bar chart, epochs to reach each % threshold
+- `artifacts/low_data/summary/epochs_to_threshold.csv` — table with columns `group`, `threshold`, `epoch` (NaN if never reached)
+
+### 5. Trainable parameter count comparison
+
+Stacked bar chart and CSV table showing how many parameters each group trains, broken down by component (decoder, bottleneck projection, adapter, head). Does not require model loading or training artifacts — computed analytically from architecture config values.
+
+```bash
+python scripts/plot_param_counts.py \
+    --groups A B C \
+    --output-dir artifacts/low_data/summary \
+    --bottleneck-channels 512 \
+    --hidden-channels 512 \
+    --num-classes 1 \
+    --encoder-last-channels 512
+```
+
+Or as a standalone call:
+
+```python
+from src.analysis.low_data_reporting import write_param_count_artifacts
+
+write_param_count_artifacts(
+    output_dir="artifacts/low_data/summary",
+    groups=["A", "B", "C"],
+    bottleneck_channels=512,       # from model.bottleneck_channels in config
+    hidden_channels=512,           # from adapter.hidden_channels in config
+    num_classes=1,                 # from model.num_classes in config
+    encoder_last_channels=512,     # resnet34 last stage output channels
+    dpi=150,
+)
+```
+
+Key insight: Group B (conv adapter) and Group C (NODE adapter) have the **same** trainable parameter count — the NODE adapter reuses a single conv block across multiple Euler steps, so depth comes for free with no extra parameters.
+
+Outputs:
+- `artifacts/low_data/summary/param_counts.csv` — columns: `group`, `adapter_type`, `bottleneck_proj`, `adapter`, `decoder`, `head`, `total`
+- `artifacts/low_data/summary/param_counts.png` — stacked bar chart by component (M params)
