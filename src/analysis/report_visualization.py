@@ -322,3 +322,62 @@ def save_multiseed_figures(*, runs: pd.DataFrame, summary: pd.DataFrame, output_
     )
     if "B-base" in set(runs["method"]):
         _save_delta_vs_b(runs, output_dir / "multiseed_delta_vs_b.png")
+
+
+def _save_steps_line_plot(
+    *,
+    table: pd.DataFrame,
+    metric: str,
+    ylabel: str,
+    title: str,
+    output_path: Path,
+) -> None:
+    plt = _get_plotting_libs()
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    for init, group in table.groupby("init", sort=False):
+        ordered = group.sort_values("steps")
+        ax.plot(
+            ordered["steps"],
+            ordered[metric],
+            marker="o",
+            linewidth=2,
+            label=str(init),
+            color=_COLORS.get(str(init), "#4f83cc"),
+        )
+    ax.set_title(title)
+    ax.set_xlabel("NODE Euler Steps (T=1)")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(sorted(table["steps"].unique()))
+    ax.grid(True, alpha=0.3)
+    ax.legend(title="Init")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def save_steps_ablation_figures(*, table: pd.DataFrame, output_dir: str | Path) -> None:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if table.empty:
+        return
+    _save_steps_line_plot(
+        table=table,
+        metric="best_dice",
+        ylabel="Best Dice",
+        title="Steps Ablation: Best Dice",
+        output_path=output_dir / "steps_best_dice.png",
+    )
+    _save_steps_line_plot(
+        table=table,
+        metric="final_dice",
+        ylabel="Final Dice",
+        title="Steps Ablation: Final Dice",
+        output_path=output_dir / "steps_final_dice.png",
+    )
+    _save_steps_line_plot(
+        table=table,
+        metric="peak_final_gap",
+        ylabel="Best - Final Dice",
+        title="Steps Ablation: Peak-Final Gap",
+        output_path=output_dir / "steps_peak_final_gap.png",
+    )

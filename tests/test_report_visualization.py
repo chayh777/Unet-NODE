@@ -134,3 +134,22 @@ def test_save_multiseed_figures_writes_expected_pngs(tmp_path: Path) -> None:
     assert (tmp_path / "multiseed_best_dice.png").exists()
     assert (tmp_path / "multiseed_final_dice.png").exists()
     assert (tmp_path / "multiseed_delta_vs_b.png").exists()
+
+
+def test_save_steps_ablation_figures_writes_expected_pngs(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import save_steps_ablation_figures
+
+    table = pd.DataFrame(
+        [
+            {"init": "default", "steps": 2, "best_dice": 0.70, "final_dice": 0.68, "peak_final_gap": 0.02},
+            {"init": "default", "steps": 4, "best_dice": 0.72, "final_dice": 0.69, "peak_final_gap": 0.03},
+            {"init": "zero_last", "steps": 2, "best_dice": 0.74, "final_dice": 0.73, "peak_final_gap": 0.01},
+            {"init": "zero_last", "steps": 4, "best_dice": 0.75, "final_dice": 0.75, "peak_final_gap": 0.00},
+        ]
+    )
+
+    save_steps_ablation_figures(table=table, output_dir=tmp_path)
+
+    assert (tmp_path / "steps_best_dice.png").exists()
+    assert (tmp_path / "steps_final_dice.png").exists()
+    assert (tmp_path / "steps_peak_final_gap.png").exists()
