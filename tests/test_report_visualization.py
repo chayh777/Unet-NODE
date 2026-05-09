@@ -80,3 +80,32 @@ def test_build_multiseed_tables_collects_known_methods(tmp_path: Path) -> None:
     assert runs["seed"].tolist() == [0, 0]
     assert summary["method"].tolist() == ["B-base", "C-zero-last-steps8"]
     assert summary.loc[summary["method"] == "C-zero-last-steps8", "best_dice_mean"].iloc[0] == 0.75
+
+
+def test_build_steps_ablation_table_collects_default_and_zero_last(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_steps_ablation_table
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data" / "group_c",
+        best=0.71,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.71, "val_iou": 0.51},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_followup" / "c_zero_last_fine_integration" / "group_c",
+        best=0.76,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.74, "val_iou": 0.56},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.76, "val_iou": 0.58},
+        ],
+    )
+
+    table = build_steps_ablation_table(artifacts_dir)
+
+    assert table[["init", "steps", "run", "best_dice"]].to_dict("records") == [
+        {"init": "default", "steps": 4, "run": "c_base", "best_dice": 0.71},
+        {"init": "zero_last", "steps": 8, "run": "c_zero_last_fine_integration", "best_dice": 0.76},
+    ]

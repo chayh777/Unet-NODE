@@ -156,3 +156,48 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
     summary = summary.sort_values("method").reset_index(drop=True)
     summary["method"] = summary["method"].astype(str)
     return runs, summary
+
+
+_STEPS_ABLATION_RUNS = [
+    ("default", 2, "c_steps2_t1", "low_data_followup/c_steps2_t1/group_c"),
+    ("default", 4, "c_base", "low_data/group_c"),
+    ("default", 8, "c_fine_integration", "low_data_followup/c_fine_integration/group_c"),
+    ("default", 16, "c_steps16_t1", "low_data_followup/c_steps16_t1/group_c"),
+    ("zero_last", 2, "c_zero_last_steps2_t1", "low_data_followup/c_zero_last_steps2_t1/group_c"),
+    ("zero_last", 4, "c_zero_last", "low_data_followup/c_zero_last/group_c"),
+    ("zero_last", 8, "c_zero_last_fine_integration", "low_data_followup/c_zero_last_fine_integration/group_c"),
+    ("zero_last", 16, "c_zero_last_steps16_t1", "low_data_followup/c_zero_last_steps16_t1/group_c"),
+]
+
+
+def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
+    artifacts_dir = Path(artifacts_dir)
+    rows: list[dict[str, Any]] = []
+    for init, steps, run_name, relative_root in _STEPS_ABLATION_RUNS:
+        root = artifacts_dir / relative_root
+        if not root.exists():
+            continue
+        row = summarize_run(root=root, method=f"{init}-steps{steps}", run=run_name, seed=None)
+        row["init"] = init
+        row["steps"] = steps
+        row["T"] = 1.0
+        rows.append(row)
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        return pd.DataFrame(
+            columns=[
+                "init",
+                "steps",
+                "T",
+                "run",
+                "best_dice",
+                "best_iou",
+                "best_epoch",
+                "final_dice",
+                "peak_final_gap",
+                "epochs_ran",
+                "root",
+            ]
+        )
+    return table.sort_values(["init", "steps"]).reset_index(drop=True)
