@@ -109,3 +109,28 @@ def test_build_steps_ablation_table_collects_default_and_zero_last(tmp_path: Pat
         {"init": "default", "steps": 4, "run": "c_base", "best_dice": 0.71},
         {"init": "zero_last", "steps": 8, "run": "c_zero_last_fine_integration", "best_dice": 0.76},
     ]
+
+
+def test_save_multiseed_figures_writes_expected_pngs(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import save_multiseed_figures
+
+    runs = pd.DataFrame(
+        [
+            {"method": "B-base", "seed": 0, "best_dice": 0.70, "final_dice": 0.68, "peak_final_gap": 0.02},
+            {"method": "B-base", "seed": 1, "best_dice": 0.72, "final_dice": 0.71, "peak_final_gap": 0.01},
+            {"method": "C-zero-last-steps8", "seed": 0, "best_dice": 0.75, "final_dice": 0.73, "peak_final_gap": 0.02},
+            {"method": "C-zero-last-steps8", "seed": 1, "best_dice": 0.76, "final_dice": 0.74, "peak_final_gap": 0.02},
+        ]
+    )
+    summary = pd.DataFrame(
+        [
+            {"method": "B-base", "best_dice_mean": 0.71, "best_dice_std": 0.014, "final_dice_mean": 0.695, "final_dice_std": 0.021},
+            {"method": "C-zero-last-steps8", "best_dice_mean": 0.755, "best_dice_std": 0.007, "final_dice_mean": 0.735, "final_dice_std": 0.007},
+        ]
+    )
+
+    save_multiseed_figures(runs=runs, summary=summary, output_dir=tmp_path)
+
+    assert (tmp_path / "multiseed_best_dice.png").exists()
+    assert (tmp_path / "multiseed_final_dice.png").exists()
+    assert (tmp_path / "multiseed_delta_vs_b.png").exists()

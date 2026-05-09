@@ -201,3 +201,124 @@ def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
             ]
         )
     return table.sort_values(["init", "steps"]).reset_index(drop=True)
+
+
+_COLORS = {
+    "B-base": "#7a7a7a",
+    "C-fine-steps8-default": "#377eb8",
+    "C-zero-last-steps8": "#e15759",
+    "C-zero-last-steps16": "#984ea3",
+    "default": "#377eb8",
+    "zero_last": "#e15759",
+}
+
+
+def _method_order(methods: list[str]) -> list[str]:
+    return [method for method in _MULTISEED_ORDER if method in set(methods)]
+
+
+def _save_bar_with_points(
+    *,
+    runs: pd.DataFrame,
+    summary: pd.DataFrame,
+    metric: str,
+    mean_col: str,
+    std_col: str,
+    ylabel: str,
+    title: str,
+    output_path: Path,
+) -> None:
+    plt = _get_plotting_libs()
+    order = _method_order([str(x) for x in summary["method"].tolist()])
+    x_positions = list(range(len(order)))
+    means = [float(summary.loc[summary["method"] == method, mean_col].iloc[0]) for method in order]
+    stds = [float(summary.loc[summary["method"] == method, std_col].fillna(0.0).iloc[0]) for method in order]
+    colors = [_COLORS.get(method, "#4f83cc") for method in order]
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    ax.bar(x_positions, means, yerr=stds, capsize=4, color=colors, alpha=0.85)
+    for idx, method in enumerate(order):
+        method_rows = runs[runs["method"] == method].sort_values("seed")
+        offsets = [-0.12, 0.0, 0.12, 0.24, -0.24]
+        for point_idx, (_, row) in enumerate(method_rows.iterrows()):
+            ax.scatter(
+                idx + offsets[point_idx % len(offsets)],
+                float(row[metric]),
+                color="black",
+                s=24,
+                zorder=3,
+            )
+
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(order, rotation=20, ha="right")
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def _save_delta_vs_b(runs: pd.DataFrame, output_path: Path) -> None:
+    plt = _get_plotting_libs()
+    wide_best = runs.pivot(index="seed", columns="method", values="best_dice")
+    wide_final = runs.pivot(index="seed", columns="method", values="final_dice")
+    methods = [method for method in _MULTISEED_ORDER if method != "B-base" and method in wide_best.columns]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True)
+    for method in methods:
+        axes[0].plot(
+            wide_best.index,
+            wide_best[method] - wide_best["B-base"],
+            marker="o",
+            label=method,
+            color=_COLORS.get(method),
+        )
+        axes[1].plot(
+            wide_final.index,
+            wide_final[method] - wide_final["B-base"],
+            marker="o",
+            label=method,
+            color=_COLORS.get(method),
+        )
+
+    axes[0].set_title("Best Dice Delta vs B-base")
+    axes[0].set_ylabel("Delta Dice")
+    axes[1].set_title("Final Dice Delta vs B-base")
+    for ax in axes:
+        ax.axhline(0.0, color="black", linewidth=1, linestyle="--")
+        ax.set_xlabel("Seed")
+        ax.grid(True, alpha=0.3)
+    axes[1].legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def save_multiseed_figures(*, runs: pd.DataFrame, summary: pd.DataFrame, output_dir: str | Path) -> None:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if runs.empty or summary.empty:
+        return
+    _save_bar_with_points(
+        runs=runs,
+        summary=summary,
+        metric="best_dice",
+        mean_col="best_dice_mean",
+        std_col="best_dice_std",
+        ylabel="Best Dice",
+        title="Multi-Seed Best Dice",
+        output_path=output_dir / "multiseed_best_dice.png",
+    )
+    _save_bar_with_points(
+        runs=runs,
+        summary=summary,
+        metric="final_dice",
+        mean_col="final_dice_mean",
+        std_col="final_dice_std",
+        ylabel="Final Dice",
+        title="Multi-Seed Final Dice",
+        output_path=output_dir / "multiseed_final_dice.png",
+    )
+    if "B-base" in set(runs["method"]):
+        _save_delta_vs_b(runs, output_dir / "multiseed_delta_vs_b.png")
