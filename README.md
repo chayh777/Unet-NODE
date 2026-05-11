@@ -108,6 +108,27 @@ Current artifact contract:
 - artifacts/low_data/summary/history_compare.csv
 - artifacts/low_data/summary/segmentation_compare.png
 
+### Robustness experiment contract
+```bash
+# Step A: Run robustness analysis across all noise levels
+python scripts/run_robustness_analysis.py --config configs/experiments/isic2018_low_data_node.yaml --artifacts-dir artifacts/low_data --groups A B C
+
+# Step B: Extract geometry with sigma=0.2 noise
+python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group C --noise-sigma 0.2
+python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group B --noise-sigma 0.2
+python scripts/run_low_data_geometry.py --config configs/experiments/isic2018_low_data_node.yaml --group A --noise-sigma 0.2
+
+# Step C: Generate robustness summary
+python scripts/plot_robustness_summary.py --artifacts-dir artifacts/low_data
+```
+
+Current artifact contract:
+- artifacts/low_data/robustness/robustness_metrics.csv
+- artifacts/low_data/robustness/dice_decay_curve.png
+- artifacts/low_data/robustness/iou_decay_curve.png
+- artifacts/low_data/robustness/geometry/sigma0.2/bottleneck_before_after_scatter.png
+- artifacts/low_data/robustness/summary/robustness_analysis.png
+
 Interpretation notes:
 - `pre_adapter` is the raw encoder-decoder bottleneck representation before the bottleneck adapter is applied.
 - `post_adapter` is the bottleneck representation after the conv adapter or NODE adapter evolves that same representation.
