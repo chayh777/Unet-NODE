@@ -244,4 +244,4 @@ def generate_segmentation_comparison(
         dpi=dpi,
     )
 
-    return output_dir
+    return output_path
