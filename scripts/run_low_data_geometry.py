@@ -27,6 +27,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["A", "B", "C"],
         help="Ablation group to export and plot.",
     )
+    parser.add_argument(
+        "--noise-sigma",
+        type=float,
+        default=0.0,
+        help="Gaussian noise sigma for robustness test (default: 0.0).",
+    )
     return parser
 
 
@@ -40,6 +46,7 @@ def main() -> None:
         config=config,
         group=args.group,
         checkpoint_path=checkpoint_path,
+        noise_sigma=args.noise_sigma,
     )
 
     plot_config = config.get("geometry_plot", {})

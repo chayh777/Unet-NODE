@@ -20,6 +20,12 @@ from src.utils.io import ensure_dir, load_checkpoint
 _ISIC_BINARY_CLASS_VALUES = {"background": 0, "lesion": 1}
 
 
+def _add_gaussian_noise(images: torch.Tensor, sigma: float) -> torch.Tensor:
+    if sigma <= 0:
+        return images
+    return images + torch.randn_like(images) * sigma
+
+
 def _normalize_state_dict(raw_state: Any) -> dict[str, Any]:
     if isinstance(raw_state, dict):
         for key in ("state_dict", "model_state_dict"):
@@ -226,6 +232,7 @@ def export_group_geometry(
     config: dict[str, Any],
     group: str,
     checkpoint_path: Path | str,
+    noise_sigma: float = 0.0,
 ) -> tuple[Path, Path]:
     _validate_geometry_export_config(config)
     geometry_config = config.get("geometry", {})
@@ -280,7 +287,9 @@ def export_group_geometry(
         rows: list[dict[str, Any]] = []
         with torch.no_grad():
             for batch in loader:
-                model_output = model(batch["image"].float().to(device))
+                images = batch["image"].float()
+                images = _add_gaussian_noise(images, noise_sigma)
+                model_output = model(images.to(device))
                 rows.extend(
                     build_embedding_rows(
                         model_output=model_output,
@@ -306,11 +315,19 @@ def export_group_geometry(
         else:
             raise
 
-    geometry_dir = ensure_dir(
-        Path(config["paths"]["artifacts_dir"])
-        / f"group_{group.lower()}"
-        / "geometry"
-    )
+    if noise_sigma > 0:
+        geometry_dir = ensure_dir(
+            Path(config["paths"]["artifacts_dir"])
+            / f"group_{group.lower()}"
+            / "geometry"
+            / f"sigma{noise_sigma}"
+        )
+    else:
+        geometry_dir = ensure_dir(
+            Path(config["paths"]["artifacts_dir"])
+            / f"group_{group.lower()}"
+            / "geometry"
+        )
     pre_path = geometry_dir / "pre_adapter_embeddings.csv"
     post_path = geometry_dir / "post_adapter_embeddings.csv"
     embedding_dim = int(config["model"]["bottleneck_channels"])
