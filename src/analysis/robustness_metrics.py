@@ -55,7 +55,9 @@ def run_noisy_inference(
             if sigma > 0:
                 images = add_gaussian_noise(images, sigma)
             images = images.to(device_t)
-            logits = model(images).logits
+            logits = model(images)
+            if hasattr(logits, "logits"):
+                logits = logits.logits
             preds = (torch.sigmoid(logits) > 0.5).squeeze(1).cpu().numpy().astype(np.uint8)
             for i, sample_id in enumerate(batch["sample_id"]):
                 results.append({
@@ -187,7 +189,7 @@ def run_robustness_experiment(
             node_step_size=float(config["node"]["step_size"]),
             adapter_init="default",
         )
-        state = torch.load(checkpoint_path, map_location="cpu")
+        state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         model.load_state_dict(state)
         model.eval()
         model.to(device)
