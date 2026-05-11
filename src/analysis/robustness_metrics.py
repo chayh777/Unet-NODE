@@ -206,7 +206,9 @@ def run_robustness_experiment(
     output_dir = artifacts_dir / "robustness"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    metrics_df = save_robustness_metrics(all_metrics, output_dir / "robustness_metrics.csv")
+    metrics_csv = output_dir / "robustness_metrics.csv"
+    save_robustness_metrics(all_metrics, metrics_csv)
+    metrics_df = pd.read_csv(metrics_csv)
 
     plot_decay_curve(
         metrics_df,
