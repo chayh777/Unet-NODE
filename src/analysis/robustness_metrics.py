@@ -139,3 +139,86 @@ def plot_decay_curve(
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
+
+
+def run_robustness_experiment(
+    config: dict[str, Any],
+    artifacts_dir: Path,
+    groups: list[str] = ["A", "B", "C"],
+    noise_levels: list[float] = [0.0, 0.05, 0.1, 0.15, 0.2, 0.3],
+) -> Path:
+    from src.data.isic2018 import ISIC2018Dataset
+    from src.models.segmentation_model import build_segmentation_model
+    from src.experiments.low_data_runner import resolve_group_adapter
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    val_dataset = ISIC2018Dataset(
+        images_dir=config["paths"]["val_images_dir"],
+        masks_dir=config["paths"]["val_masks_dir"],
+        image_size=config["data"]["image_size"],
+        class_values={"background": 0, "lesion": 1},
+        sample_ids=None,
+    )
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+
+    ground_truth_by_id = {}
+    for idx in range(len(val_dataset)):
+        item = val_dataset[idx]
+        ground_truth_by_id[item["sample_id"]] = item["mask"].numpy().astype(np.uint8)
+
+    all_metrics = []
+    for group in groups:
+        checkpoint_path = artifacts_dir / f"group_{group.lower()}" / "best.pt"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Missing checkpoint: {checkpoint_path}")
+
+        adapter_type = resolve_group_adapter(group)
+        model = build_segmentation_model(
+            encoder_name=config["model"]["encoder_name"],
+            encoder_weights=None,
+            in_channels=int(config["model"]["in_channels"]),
+            num_classes=int(config["model"]["num_classes"]),
+            adapter_type=adapter_type,
+            bottleneck_channels=int(config["model"]["bottleneck_channels"]),
+            adapter_hidden_channels=int(config["adapter"]["hidden_channels"]),
+            freeze_encoder=False,
+            node_steps=int(config["node"]["steps"]),
+            node_step_size=float(config["node"]["step_size"]),
+            adapter_init="default",
+        )
+        state = torch.load(checkpoint_path, map_location="cpu")
+        model.load_state_dict(state)
+        model.eval()
+        model.to(device)
+
+        for sigma in noise_levels:
+            results = run_noisy_inference(model, val_loader, sigma, device=device)
+            agg = aggregate_metrics(results, ground_truth_by_id)
+            all_metrics.append({
+                "group": group,
+                "sigma": sigma,
+                **agg,
+            })
+
+    output_dir = artifacts_dir / "robustness"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics_df = save_robustness_metrics(all_metrics, output_dir / "robustness_metrics.csv")
+
+    plot_decay_curve(
+        metrics_df,
+        metric="dice",
+        output_path=output_dir / "dice_decay_curve.png",
+        title="DICE vs Noise Level",
+        ylabel="Dice",
+    )
+    plot_decay_curve(
+        metrics_df,
+        metric="iou",
+        output_path=output_dir / "iou_decay_curve.png",
+        title="IoU vs Noise Level",
+        ylabel="IoU",
+    )
+
+    return output_dir
