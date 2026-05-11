@@ -75,6 +75,11 @@ Summary reporting contract:
 python scripts/plot_low_data_summary.py --artifacts-dir artifacts/low_data --groups A B C
 ```
 
+### Segmentation comparison visualization contract
+```bash
+python scripts/plot_segmentation_compare.py --config configs/experiments/isic2018_low_data_node.yaml --artifacts-dir artifacts/low_data --groups A B C
+```
+
 Current artifact contract:
 - artifacts/low_data/group_a/best.pt
 - artifacts/low_data/group_a/history.csv
@@ -101,7 +106,7 @@ Current artifact contract:
 - artifacts/low_data/summary/loss_curve_compare.png
 - artifacts/low_data/summary/final_metrics_compare.png
 - artifacts/low_data/summary/history_compare.csv
-- artifacts/low_data/summary/final_metrics_compare.csv
+- artifacts/low_data/summary/segmentation_compare.png
 
 Interpretation notes:
 - `pre_adapter` is the raw encoder-decoder bottleneck representation before the bottleneck adapter is applied.
