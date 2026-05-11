@@ -62,3 +62,25 @@ def test_add_gaussian_noise_shape():
     noisy = add_gaussian_noise(images, sigma=0.1)
     assert noisy.shape == images.shape
     assert not torch.allclose(noisy, images)
+
+
+def test_aggregate_metrics_empty():
+    from src.analysis.robustness_metrics import aggregate_metrics
+    result = aggregate_metrics([], {})
+    assert result["mean_dice"] == 0.0
+    assert result["num_samples"] == 0
+
+
+def test_aggregate_metrics_with_data():
+    from src.analysis.robustness_metrics import aggregate_metrics
+    results = [
+        {"sample_id": "a", "prediction": np.array([[1, 1], [1, 1]])},
+        {"sample_id": "b", "prediction": np.array([[1, 1], [1, 1]])},
+    ]
+    gt = {
+        "a": np.array([[1, 1], [1, 1]]),
+        "b": np.array([[1, 1], [1, 1]]),
+    }
+    result = aggregate_metrics(results, gt)
+    assert result["mean_dice"] == pytest.approx(1.0)
+    assert result["num_samples"] == 2
