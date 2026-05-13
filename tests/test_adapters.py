@@ -143,3 +143,44 @@ def test_node_adapter_backward_smoke():
 
     assert x.grad is not None
     assert any(p.grad is not None for p in model.parameters())
+
+
+def test_node_adapter_rk4_preserves_shape():
+    x = torch.randn(2, 32, 8, 8)
+    y = NODEAdapter(
+        channels=32,
+        hidden_channels=32,
+        steps=4,
+        step_size=0.25,
+        solver="rk4",
+    )(x)
+    assert tuple(y.shape) == (2, 32, 8, 8)
+
+
+def test_node_adapter_rk4_backward_smoke():
+    x = torch.randn(2, 32, 8, 8, requires_grad=True)
+    model = NODEAdapter(
+        channels=32,
+        hidden_channels=32,
+        steps=2,
+        step_size=0.25,
+        solver="rk4",
+    )
+    y = model(x)
+    loss = y.mean()
+    loss.backward()
+
+    assert x.grad is not None
+    assert any(p.grad is not None for p in model.parameters())
+
+
+def test_node_adapter_euler_default_solver():
+    x = torch.randn(2, 32, 8, 8)
+    model = NODEAdapter(
+        channels=32,
+        hidden_channels=32,
+        steps=4,
+        step_size=0.25,
+    )
+    y = model(x)
+    assert tuple(y.shape) == (2, 32, 8, 8)
