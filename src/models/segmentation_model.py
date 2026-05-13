@@ -129,6 +129,7 @@ class SegmentationModel(nn.Module):
         freeze_encoder: bool,
         node_steps: int,
         node_step_size: float,
+        node_solver: str = "euler",
         adapter_init: AdapterInit = "default",
     ) -> None:
         super().__init__()
@@ -168,6 +169,7 @@ class SegmentationModel(nn.Module):
                 steps=node_steps,
                 step_size=node_step_size,
                 init=adapter_init,
+                solver=node_solver,
             )
         else:
             raise ValueError(f"Unknown adapter_type: {adapter_type}")
