@@ -48,6 +48,7 @@ def load_model_for_group(checkpoint_path: Path, config: dict[str, Any], group: s
         freeze_encoder=False,
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        node_solver=str(config["node"].get("solver", "euler")),
         adapter_init="default",
     )
     state = torch.load(checkpoint_path, map_location="cpu")

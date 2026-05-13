@@ -119,7 +119,7 @@ def _validate_geometry_export_config(config: dict[str, Any]) -> None:
     _require_keys(adapter, ["hidden_channels"], "config.adapter")
 
     node = _require_mapping(config, "node", "config")
-    _require_keys(node, ["steps", "step_size"], "config.node")
+    _require_keys(node, ["steps", "step_size", "solver"], "config.node")
 
     if "geometry" in config and not isinstance(config["geometry"], dict):
         raise ValueError("config.geometry must be a mapping when provided.")
@@ -276,6 +276,7 @@ def export_group_geometry(
         freeze_encoder=bool(config["model"]["freeze_encoder"]),
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        node_solver=str(config["node"].get("solver", "euler")),
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -202,7 +202,7 @@ def _validate_low_data_config(config: dict[str, Any]) -> None:
     _require_keys(adapter, ["hidden_channels"], "config.adapter")
 
     node = _require_mapping(config, "node", "config")
-    _require_keys(node, ["steps", "step_size"], "config.node")
+    _require_keys(node, ["steps", "step_size", "solver"], "config.node")
 
 
 def _resolve_adapter_init(config: dict[str, Any]) -> str:
@@ -325,6 +325,7 @@ def run_group(config_path: str | Path, group: str):
         freeze_encoder=bool(config["model"]["freeze_encoder"]),
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        node_solver=str(config["node"].get("solver", "euler")),
         adapter_init=adapter_init,
     )
 
