@@ -276,6 +276,56 @@ def test_output_side_comparison_configs_parse_with_expected_settings():
         assert config["train"]["save_best_checkpoint"] is False
 
 
+def test_stability_tuning_configs_parse_with_expected_regularization_fields():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 4,
+            "solver": "euler",
+        },
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic_steps8.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 8,
+            "solver": "euler",
+        },
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic_rk4.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 4,
+            "solver": "rk4",
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        reg = config["regularization"]
+        assert reg["type"] == values["type"]
+        assert float(reg["weight"]) == values["weight"]
+        assert int(config["node"]["steps"]) == values["steps"]
+        assert str(config["node"]["solver"]) == values["solver"]
+        assert config["adapter"]["init"] == "zero_last_layer"
+
+
+def test_stability_tuning_matrix_configs_smoke_parse():
+    from src.experiments.low_data_runner import load_config
+
+    paths = [
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic.yaml",
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic_steps8.yaml",
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic_rk4.yaml",
+    ]
+
+    for path in paths:
+        config = load_config(path)
+        assert config["adapter"]["type"] == "node"
+        assert config["adapter"]["init"] == "zero_last_layer"
+        assert config["train"]["save_best_checkpoint"] is False
+
+
 def test_load_config_raises_clear_error_for_malformed_yaml(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("seed: [1,2\n", encoding="utf-8")
@@ -489,6 +539,7 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
         output_dir,
         device="cpu",
         save_best_checkpoint=True,
+        regularization=None,
     ):
         calls["fit"] = {
             "epochs": epochs,
@@ -497,6 +548,7 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
             "device": device,
             "optimizer": optimizer,
             "save_best_checkpoint": save_best_checkpoint,
+            "regularization": regularization,
         }
         # Runner should ensure output_dir exists before training starts.
         calls["output_dir_exists"] = Path(output_dir).exists()
@@ -835,12 +887,14 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
         output_dir,
         device="cpu",
         save_best_checkpoint=True,
+        regularization=None,
     ):
         calls.setdefault("fit_calls", []).append(
             {
                 "train_loader": train_loader,
                 "val_loader": val_loader,
                 "save_best_checkpoint": save_best_checkpoint,
+                "regularization": regularization,
             }
         )
         if len(calls["fit_calls"]) == 1:
@@ -995,6 +1049,7 @@ def test_run_group_does_not_retry_on_unrelated_winerror5_permission_error(
         output_dir,
         device="cpu",
         save_best_checkpoint=True,
+        regularization=None,
     ):
         calls.setdefault("fit_calls", []).append(1)
         # Simulate a non-DataLoader PermissionError (e.g. file write).
@@ -1130,8 +1185,10 @@ def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error
         output_dir,
         device="cpu",
         save_best_checkpoint=True,
+        regularization=None,
     ):
         calls["optimizer"] = optimizer
+        calls["regularization"] = regularization
         return "FIT_RESULT"
 
     fake_engine.fit = fit
@@ -1284,12 +1341,14 @@ def test_run_group_passes_save_best_checkpoint_flag_to_engine(tmp_path, monkeypa
         output_dir,
         device="cpu",
         save_best_checkpoint=True,
+        regularization=None,
     ):
         calls["fit"] = {
             "epochs": epochs,
             "patience": patience,
             "save_best_checkpoint": save_best_checkpoint,
             "output_dir": str(output_dir),
+            "regularization": regularization,
         }
         return None
 

@@ -105,3 +105,48 @@ def test_fit_can_skip_best_checkpoint_and_still_write_timing_metrics(tmp_path: P
     assert metrics["best_epoch"] == 1
     assert metrics["duration_sec"] >= 0.0
     assert metrics["avg_epoch_sec"] >= 0.0
+
+
+def test_compute_regularization_loss_returns_zero_when_disabled():
+    from src.training.engine import compute_regularization_loss
+
+    loss = compute_regularization_loss(
+        model_output=object(),
+        regularization={"type": "none", "weight": 0.0},
+    )
+
+    assert torch.is_tensor(loss)
+    assert float(loss.item()) == 0.0
+
+
+def test_run_epoch_includes_kinetic_regularization_when_present():
+    from src.training.engine import run_epoch
+
+    class _Output:
+        def __init__(self, logits):
+            self.logits = logits
+            self.node_diagnostics = {
+                "kinetic_terms": [torch.tensor(2.0), torch.tensor(4.0)]
+            }
+
+    class _Model(torch.nn.Module):
+        def forward(self, x):
+            return _Output(torch.zeros(x.shape[0], 1, x.shape[2], x.shape[3]))
+
+    loader = [
+        {
+            "image": torch.randn(2, 3, 16, 16),
+            "mask": torch.zeros(2, 16, 16),
+        }
+    ]
+
+    metrics = run_epoch(
+        model=_Model(),
+        loader=loader,
+        optimizer=None,
+        regularization={"type": "kinetic", "weight": 0.5},
+    )
+
+    assert "reg_loss" in metrics
+    assert metrics["reg_loss"] > 0.0
+    assert "task_loss" in metrics

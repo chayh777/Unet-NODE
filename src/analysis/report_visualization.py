@@ -55,6 +55,8 @@ def summarize_run(
     avg_epoch_sec = metrics.get("avg_epoch_sec")
     best_checkpoint = metrics.get("best_checkpoint")
     checkpoint_saved = metrics.get("checkpoint_saved")
+    regularization_type = metrics.get("regularization_type", "none")
+    regularization_weight = metrics.get("regularization_weight", 0.0)
     if checkpoint_saved is None:
         checkpoint_saved = bool(best_checkpoint)
 
@@ -73,6 +75,8 @@ def summarize_run(
         "avg_epoch_sec": float(avg_epoch_sec) if avg_epoch_sec is not None else None,
         "checkpoint_saved": bool(checkpoint_saved),
         "best_checkpoint": best_checkpoint,
+        "regularization_type": regularization_type,
+        "regularization_weight": float(regularization_weight),
         "root": str(root),
     }
 
@@ -175,6 +179,8 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
             "avg_epoch_sec",
             "checkpoint_saved",
             "best_checkpoint",
+            "regularization_type",
+            "regularization_weight",
             "root",
         ]
         return pd.DataFrame(columns=columns), pd.DataFrame()

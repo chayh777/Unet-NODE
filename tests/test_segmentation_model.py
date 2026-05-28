@@ -136,3 +136,47 @@ def test_bottleneck_side_adapter_keeps_backward_compatible_output_fields():
     assert output.bottleneck.shape == (2, 32, 4, 4)
     assert output.adapted_bottleneck.shape == output.bottleneck.shape
     assert output.output_adapter_activation is None
+    assert output.node_diagnostics is None
+
+
+def test_segmentation_model_exposes_node_diagnostics_for_bottleneck_node():
+    model = build_segmentation_model(
+        encoder_name="resnet18",
+        encoder_weights=None,
+        in_channels=3,
+        num_classes=1,
+        adapter_type="node",
+        bottleneck_channels=32,
+        adapter_hidden_channels=16,
+        freeze_encoder=True,
+        node_steps=4,
+        node_step_size=0.25,
+        adapter_init="zero_last_layer",
+    )
+    x = torch.randn(2, 3, 64, 64)
+
+    output = model(x)
+
+    assert output.node_diagnostics is not None
+    assert "kinetic_terms" in output.node_diagnostics
+    assert len(output.node_diagnostics["kinetic_terms"]) == 4
+
+
+def test_segmentation_model_non_node_paths_do_not_emit_node_diagnostics():
+    model = build_segmentation_model(
+        encoder_name="resnet18",
+        encoder_weights=None,
+        in_channels=3,
+        num_classes=1,
+        adapter_type="conv",
+        bottleneck_channels=32,
+        adapter_hidden_channels=16,
+        freeze_encoder=True,
+        node_steps=4,
+        node_step_size=0.25,
+    )
+    x = torch.randn(2, 3, 64, 64)
+
+    output = model(x)
+
+    assert output.node_diagnostics is None

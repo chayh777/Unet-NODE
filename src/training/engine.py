@@ -18,7 +18,11 @@ from src.training.metrics import compute_binary_dice, compute_binary_iou
 class EpochMetrics:
     epoch: int
     train_loss: float
+    train_task_loss: float
+    train_reg_loss: float
     val_loss: float
+    val_task_loss: float
+    val_reg_loss: float
     val_dice: float
     val_iou: float
 
@@ -27,7 +31,17 @@ def save_history(rows: list[EpochMetrics], output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    fieldnames = ["epoch", "train_loss", "val_loss", "val_dice", "val_iou"]
+    fieldnames = [
+        "epoch",
+        "train_loss",
+        "train_task_loss",
+        "train_reg_loss",
+        "val_loss",
+        "val_task_loss",
+        "val_reg_loss",
+        "val_dice",
+        "val_iou",
+    ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -135,11 +149,42 @@ def _align_binary_targets_or_raise(logits: torch.Tensor, masks: torch.Tensor) ->
     return masks
 
 
+def compute_regularization_loss(
+    *,
+    model_output: Any,
+    regularization: dict[str, Any] | None,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    if device is None:
+        device = torch.device("cpu")
+    if not regularization:
+        return torch.tensor(0.0, device=device)
+
+    reg_type = str(regularization.get("type", "none"))
+    reg_weight = float(regularization.get("weight", 0.0))
+    if reg_type == "none" or reg_weight == 0.0:
+        return torch.tensor(0.0, device=device)
+    if reg_type != "kinetic":
+        raise ValueError(f"Unsupported regularization type: {reg_type!r}")
+
+    diagnostics = getattr(model_output, "node_diagnostics", None)
+    if not diagnostics:
+        return torch.tensor(0.0, device=device)
+
+    kinetic_terms = diagnostics.get("kinetic_terms", [])
+    if not kinetic_terms:
+        return torch.tensor(0.0, device=device)
+
+    kinetic_mean = torch.stack(list(kinetic_terms)).mean()
+    return reg_weight * kinetic_mean
+
+
 def run_epoch(
     model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
     optimizer: Any | None = None,
     device: str | torch.device = "cpu",
+    regularization: dict[str, Any] | None = None,
 ) -> dict[str, float]:
     criterion = DiceBCELoss()
     training = optimizer is not None
@@ -151,6 +196,8 @@ def run_epoch(
         model.eval()
 
     loss_sum = 0.0
+    task_loss_sum = 0.0
+    reg_loss_sum = 0.0
     dice_sum = 0.0
     iou_sum = 0.0
     num_samples = 0
@@ -186,7 +233,13 @@ def run_epoch(
             _validate_binary_logits(logits)
             masks = _align_binary_targets_or_raise(logits, masks)
 
-            loss = criterion(logits, masks)
+            task_loss = criterion(logits, masks)
+            reg_loss = compute_regularization_loss(
+                model_output=model_output,
+                regularization=regularization,
+                device=device_t,
+            )
+            loss = task_loss + reg_loss
 
             if training:
                 loss.backward()
@@ -198,6 +251,8 @@ def run_epoch(
 
         # Weight by sample count so smaller last batches don't skew metrics.
         loss_sum += float(loss.item()) * batch_size
+        task_loss_sum += float(task_loss.item()) * batch_size
+        reg_loss_sum += float(reg_loss.item()) * batch_size
         dice_sum += float(dice.item()) * batch_size
         iou_sum += float(iou.item()) * batch_size
         num_samples += batch_size
@@ -205,6 +260,8 @@ def run_epoch(
     denom = max(1, num_samples)
     return {
         "loss": loss_sum / denom,
+        "task_loss": task_loss_sum / denom,
+        "reg_loss": reg_loss_sum / denom,
         "dice": dice_sum / denom,
         "iou": iou_sum / denom,
     }
@@ -220,6 +277,7 @@ def fit(
     output_dir: str | Path,
     device: str | torch.device = "cpu",
     save_best_checkpoint: bool = True,
+    regularization: dict[str, Any] | None = None,
 ) -> Path | None:
     output_dir_p = Path(output_dir)
     output_dir_p.mkdir(parents=True, exist_ok=True)
@@ -241,6 +299,7 @@ def fit(
             loader=train_loader,
             optimizer=optimizer,
             device=device_t,
+            regularization=regularization,
         )
         with torch.no_grad():
             val_metrics = run_epoch(
@@ -248,13 +307,18 @@ def fit(
                 loader=val_loader,
                 optimizer=None,
                 device=device_t,
+                regularization=regularization,
             )
 
         history.append(
             EpochMetrics(
                 epoch=epoch,
                 train_loss=float(train_metrics["loss"]),
+                train_task_loss=float(train_metrics["task_loss"]),
+                train_reg_loss=float(train_metrics["reg_loss"]),
                 val_loss=float(val_metrics["loss"]),
+                val_task_loss=float(val_metrics["task_loss"]),
+                val_reg_loss=float(val_metrics["reg_loss"]),
                 val_dice=float(val_metrics["dice"]),
                 val_iou=float(val_metrics["iou"]),
             )
@@ -288,6 +352,12 @@ def fit(
             "checkpoint_saved": best_saved,
             "duration_sec": duration_sec,
             "avg_epoch_sec": duration_sec / max(1, epochs_ran),
+            "regularization_type": (
+                str(regularization.get("type", "none")) if regularization else "none"
+            ),
+            "regularization_weight": (
+                float(regularization.get("weight", 0.0)) if regularization else 0.0
+            ),
         },
         output_dir_p / "metrics.json",
     )

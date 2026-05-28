@@ -16,6 +16,8 @@ def _write_run(
     avg_epoch_sec: float | None = None,
     checkpoint_saved: bool | None = None,
     best_checkpoint: str | None = None,
+    regularization_type: str | None = None,
+    regularization_weight: float | None = None,
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(root / "history.csv", index=False)
@@ -30,6 +32,10 @@ def _write_run(
         metrics["avg_epoch_sec"] = avg_epoch_sec
     if checkpoint_saved is not None:
         metrics["checkpoint_saved"] = checkpoint_saved
+    if regularization_type is not None:
+        metrics["regularization_type"] = regularization_type
+    if regularization_weight is not None:
+        metrics["regularization_weight"] = regularization_weight
     (root / "metrics.json").write_text(
         json.dumps(metrics),
         encoding="utf-8",
@@ -67,6 +73,8 @@ def test_summarize_run_reads_best_final_and_gap(tmp_path: Path) -> None:
         "avg_epoch_sec": None,
         "checkpoint_saved": True,
         "best_checkpoint": str(root / "best.pt"),
+        "regularization_type": "none",
+        "regularization_weight": 0.0,
         "root": str(root),
     }
 
@@ -95,6 +103,29 @@ def test_summarize_run_carries_timing_and_checkpoint_metrics(tmp_path: Path) -> 
     assert row["avg_epoch_sec"] == 30.0
     assert row["checkpoint_saved"] is False
     assert row["best_checkpoint"] == ""
+
+
+def test_summarize_run_preserves_regularization_metadata(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import summarize_run
+
+    root = tmp_path / "exp" / "group_c"
+    _write_run(
+        root,
+        best=0.80,
+        duration_sec=120.0,
+        avg_epoch_sec=6.0,
+        regularization_type="kinetic",
+        regularization_weight=0.0001,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.79, "val_iou": 0.60},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.80, "val_iou": 0.61},
+        ],
+    )
+
+    row = summarize_run(root=root, method="Method", run="exp", seed=0)
+
+    assert row["regularization_type"] == "kinetic"
+    assert row["regularization_weight"] == 0.0001
 
 
 def test_build_multiseed_tables_collects_known_methods(tmp_path: Path) -> None:

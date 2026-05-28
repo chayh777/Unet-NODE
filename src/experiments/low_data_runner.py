@@ -232,6 +232,30 @@ def _resolve_adapter_init(config: dict[str, Any]) -> str:
     return str(value)
 
 
+def _resolve_regularization_config(config: dict[str, Any]) -> dict[str, Any]:
+    regularization = config.get("regularization", {})
+    if regularization is None:
+        return {"type": "none", "weight": 0.0}
+    if not isinstance(regularization, dict):
+        raise ValueError("config.regularization must be a mapping/dict when provided.")
+
+    reg_type = str(regularization.get("type", "none"))
+    if reg_type not in {"none", "kinetic"}:
+        raise ValueError(
+            "config.regularization.type must be one of ['none', 'kinetic']; "
+            f"got {reg_type!r}."
+        )
+
+    weight = float(regularization.get("weight", 0.0))
+    if weight < 0.0:
+        raise ValueError(
+            "config.regularization.weight must be >= 0.0; "
+            f"got {weight!r}."
+        )
+
+    return {"type": reg_type, "weight": weight}
+
+
 def resolve_group_adapter(group: str) -> str:
     """
     Map ablation group to adapter type.
@@ -262,6 +286,7 @@ def run_group(config_path: str | Path, group: str):
     adapter_type = resolve_group_adapter(group)
     adapter_placement = _resolve_adapter_placement(config)
     adapter_init = _resolve_adapter_init(config)
+    regularization = _resolve_regularization_config(config)
 
     # Local imports keep module import lightweight; validation happens before any heavy imports.
     import torch
@@ -360,6 +385,7 @@ def run_group(config_path: str | Path, group: str):
             output_dir,
             device=device,
             save_best_checkpoint=save_best_checkpoint,
+            regularization=regularization,
         )
     except PermissionError as exc:
         configured_workers = int(loader_kwargs.get("num_workers", 0))
@@ -380,5 +406,6 @@ def run_group(config_path: str | Path, group: str):
                 output_dir,
                 device=device,
                 save_best_checkpoint=save_best_checkpoint,
+                regularization=regularization,
             )
         raise

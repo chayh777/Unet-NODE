@@ -19,6 +19,7 @@ class SegmentationModelOutput(NamedTuple):
     bottleneck: torch.Tensor
     adapted_bottleneck: torch.Tensor
     output_adapter_activation: torch.Tensor | None = None
+    node_diagnostics: dict[str, list[torch.Tensor]] | None = None
 
 
 class _FeatureInfo:
@@ -245,6 +246,11 @@ class SegmentationModel(nn.Module):
         output_adapter_activation = (
             decoded if not isinstance(self.output_adapter, IdentityAdapter) else None
         )
+        node_diagnostics = None
+        if hasattr(self.adapter, "last_diagnostics"):
+            node_diagnostics = getattr(self.adapter, "last_diagnostics")
+        if node_diagnostics is None and hasattr(self.output_adapter, "last_diagnostics"):
+            node_diagnostics = getattr(self.output_adapter, "last_diagnostics")
         logits = self.head(decoded)
         logits = F.interpolate(
             logits, size=x.shape[-2:], mode="bilinear", align_corners=False
@@ -255,6 +261,7 @@ class SegmentationModel(nn.Module):
             bottleneck=bottleneck,
             adapted_bottleneck=adapted_bottleneck,
             output_adapter_activation=output_adapter_activation,
+            node_diagnostics=node_diagnostics,
         )
 
 
