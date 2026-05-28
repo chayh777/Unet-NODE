@@ -11,7 +11,7 @@ paths:
 data:
   dataset_name: glas
   image_size: 256
-  train_ratio: 0.1
+  train_ratio: 1.0
   num_workers: 0
   pin_memory: false
 model:

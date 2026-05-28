@@ -225,22 +225,26 @@ def test_glas_low_data_configs_parse_with_expected_dataset_name():
             "dataset_name": "glas",
             "group": None,
             "save_best_checkpoint": False,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_conv_b_base.yaml": {
             "dataset_name": "glas",
             "group": "B",
             "save_best_checkpoint": False,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_base.yaml": {
             "dataset_name": "glas",
             "group": "C",
             "save_best_checkpoint": False,
+            "train_ratio": 1.0,
         },
     }
 
     for path, values in expected.items():
         config = load_config(path)
         assert config["data"]["dataset_name"] == values["dataset_name"]
+        assert float(config["data"]["train_ratio"]) == values["train_ratio"]
         if values["group"] is not None:
             assert config["experiment"]["group"] == values["group"]
         assert config["train"]["save_best_checkpoint"] is values["save_best_checkpoint"]
@@ -256,6 +260,7 @@ def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
             "adapter_type": "conv",
             "steps": 4,
             "step_size": 0.25,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_fine_integration.yaml": {
             "artifacts_dir": "artifacts/glas_low_data_followup/c_fine_integration",
@@ -263,6 +268,7 @@ def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
             "adapter_type": "node",
             "steps": 8,
             "step_size": 0.125,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_zero_last.yaml": {
             "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last",
@@ -270,6 +276,7 @@ def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
             "adapter_type": "node",
             "steps": 4,
             "step_size": 0.25,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_zero_last_fine_integration.yaml": {
             "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last_fine_integration",
@@ -277,6 +284,7 @@ def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
             "adapter_type": "node",
             "steps": 8,
             "step_size": 0.125,
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_zero_last_steps16_t1.yaml": {
             "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last_steps16_t1",
@@ -284,12 +292,14 @@ def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
             "adapter_type": "node",
             "steps": 16,
             "step_size": 0.0625,
+            "train_ratio": 1.0,
         },
     }
 
     for path, values in expected.items():
         config = load_config(path)
         assert config["data"]["dataset_name"] == "glas"
+        assert float(config["data"]["train_ratio"]) == values["train_ratio"]
         assert config["paths"]["artifacts_dir"] == values["artifacts_dir"]
         assert config["adapter"].get("init", "default") == values["init"]
         assert config["adapter"].get("type", "node") == values["adapter_type"]
@@ -307,24 +317,28 @@ def test_glas_stability_tuning_configs_parse_with_expected_regularization_fields
             "weight": 1e-4,
             "steps": 4,
             "solver": "euler",
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_zero_last_kinetic_steps8.yaml": {
             "type": "kinetic",
             "weight": 1e-4,
             "steps": 8,
             "solver": "euler",
+            "train_ratio": 1.0,
         },
         "configs/experiments/glas_low_data_node_c_zero_last_kinetic_rk4.yaml": {
             "type": "kinetic",
             "weight": 1e-4,
             "steps": 4,
             "solver": "rk4",
+            "train_ratio": 1.0,
         },
     }
 
     for path, values in expected.items():
         config = load_config(path)
         assert config["data"]["dataset_name"] == "glas"
+        assert float(config["data"]["train_ratio"]) == values["train_ratio"]
         reg = config["regularization"]
         assert reg["type"] == values["type"]
         assert float(reg["weight"]) == values["weight"]

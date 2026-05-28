@@ -4,6 +4,10 @@
 
 Mirror the core ISIC experiment story on `GlaS` so the paper is no longer supported by a single dataset only.
 
+## Protocol Note
+
+`GlaS` is much smaller than ISIC2018, so reusing `train_ratio=0.1` collapses the training split to roughly single-digit images and makes many methods degenerate to near-constant predictions. The configs in this matrix therefore use the full provided GlaS training split (`train_ratio: 1.0`) to answer the more basic question first: can the frozen-encoder bottleneck-adaptation framework learn at all on GlaS?
+
 ## Comparison Runs
 
 1. Plain U-Net
