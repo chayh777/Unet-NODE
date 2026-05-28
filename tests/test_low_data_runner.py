@@ -221,6 +221,11 @@ def test_glas_low_data_configs_parse_with_expected_dataset_name():
     from src.experiments.low_data_runner import load_config
 
     expected = {
+        "configs/experiments/glas_low_data_node.yaml": {
+            "dataset_name": "glas",
+            "group": None,
+            "save_best_checkpoint": False,
+        },
         "configs/experiments/glas_low_data_conv_b_base.yaml": {
             "dataset_name": "glas",
             "group": "B",
@@ -236,8 +241,96 @@ def test_glas_low_data_configs_parse_with_expected_dataset_name():
     for path, values in expected.items():
         config = load_config(path)
         assert config["data"]["dataset_name"] == values["dataset_name"]
-        assert config["experiment"]["group"] == values["group"]
+        if values["group"] is not None:
+            assert config["experiment"]["group"] == values["group"]
         assert config["train"]["save_best_checkpoint"] is values["save_best_checkpoint"]
+
+
+def test_glas_followup_configs_parse_with_expected_adapter_init_and_steps():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/glas_low_data_conv_b_zero_last.yaml": {
+            "artifacts_dir": "artifacts/glas_low_data_followup/b_zero_last",
+            "init": "zero_last_layer",
+            "adapter_type": "conv",
+            "steps": 4,
+            "step_size": 0.25,
+        },
+        "configs/experiments/glas_low_data_node_c_fine_integration.yaml": {
+            "artifacts_dir": "artifacts/glas_low_data_followup/c_fine_integration",
+            "init": "default",
+            "adapter_type": "node",
+            "steps": 8,
+            "step_size": 0.125,
+        },
+        "configs/experiments/glas_low_data_node_c_zero_last.yaml": {
+            "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 4,
+            "step_size": 0.25,
+        },
+        "configs/experiments/glas_low_data_node_c_zero_last_fine_integration.yaml": {
+            "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last_fine_integration",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 8,
+            "step_size": 0.125,
+        },
+        "configs/experiments/glas_low_data_node_c_zero_last_steps16_t1.yaml": {
+            "artifacts_dir": "artifacts/glas_low_data_followup/c_zero_last_steps16_t1",
+            "init": "zero_last_layer",
+            "adapter_type": "node",
+            "steps": 16,
+            "step_size": 0.0625,
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        assert config["data"]["dataset_name"] == "glas"
+        assert config["paths"]["artifacts_dir"] == values["artifacts_dir"]
+        assert config["adapter"].get("init", "default") == values["init"]
+        assert config["adapter"].get("type", "node") == values["adapter_type"]
+        assert int(config["node"]["steps"]) == values["steps"]
+        assert float(config["node"]["step_size"]) == values["step_size"]
+        assert config["train"]["save_best_checkpoint"] is False
+
+
+def test_glas_stability_tuning_configs_parse_with_expected_regularization_fields():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/glas_low_data_node_c_zero_last_kinetic.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 4,
+            "solver": "euler",
+        },
+        "configs/experiments/glas_low_data_node_c_zero_last_kinetic_steps8.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 8,
+            "solver": "euler",
+        },
+        "configs/experiments/glas_low_data_node_c_zero_last_kinetic_rk4.yaml": {
+            "type": "kinetic",
+            "weight": 1e-4,
+            "steps": 4,
+            "solver": "rk4",
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        assert config["data"]["dataset_name"] == "glas"
+        reg = config["regularization"]
+        assert reg["type"] == values["type"]
+        assert float(reg["weight"]) == values["weight"]
+        assert int(config["node"]["steps"]) == values["steps"]
+        assert str(config["node"]["solver"]) == values["solver"]
+        assert config["adapter"]["init"] == "zero_last_layer"
 
 
 def test_output_side_comparison_configs_parse_with_expected_settings():
