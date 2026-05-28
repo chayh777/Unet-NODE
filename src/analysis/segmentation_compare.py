@@ -10,6 +10,8 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
+from src.utils.io import load_model_state_dict
+
 CLASS_COLORS: dict[int, tuple[int, int, int]] | None = None
 
 
@@ -48,10 +50,11 @@ def load_model_for_group(checkpoint_path: Path, config: dict[str, Any], group: s
         freeze_encoder=False,
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        adapter_placement=str(config.get("adapter", {}).get("placement", "bottleneck")),
         node_solver=str(config["node"].get("solver", "euler")),
         adapter_init="default",
     )
-    state = torch.load(checkpoint_path, map_location="cpu")
+    state = load_model_state_dict(checkpoint_path, device="cpu")
     model.load_state_dict(state)
     model.eval()
     return model
@@ -221,8 +224,6 @@ def generate_segmentation_comparison(
     pred_by_group = {}
     for group in groups:
         checkpoint_path = artifacts_dir / f"group_{group.lower()}" / "best.pt"
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Missing checkpoint: {checkpoint_path}")
         model = load_model_for_group(checkpoint_path, config, group)
         model.to(device)
         results = run_inference(model, val_loader, device=device)

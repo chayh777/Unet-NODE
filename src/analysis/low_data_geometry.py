@@ -7,6 +7,8 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
+from src.data.factory import _load_dataset_class as _load_dataset_class_from_factory
+from src.data.factory import resolve_dataset_spec
 from src.data.isic2018 import ISIC2018Dataset
 from src.experiments.low_data_runner import (
     _is_known_windows_dataloader_worker_permission_error,
@@ -15,9 +17,7 @@ from src.experiments.low_data_runner import (
 )
 from src.features.bottleneck_pooling import pool_class_embeddings
 from src.models.segmentation_model import build_segmentation_model
-from src.utils.io import ensure_dir, load_checkpoint
-
-_ISIC_BINARY_CLASS_VALUES = {"background": 0, "lesion": 1}
+from src.utils.io import ensure_dir, load_model_state_dict
 
 
 def _add_gaussian_noise(images: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -26,32 +26,22 @@ def _add_gaussian_noise(images: torch.Tensor, sigma: float) -> torch.Tensor:
     return images + torch.randn_like(images) * sigma
 
 
-def _normalize_state_dict(raw_state: Any) -> dict[str, Any]:
-    if isinstance(raw_state, dict):
-        for key in ("state_dict", "model_state_dict"):
-            if key in raw_state:
-                raw_state = raw_state[key]
-                break
-
-    if not isinstance(raw_state, dict):
-        raise RuntimeError("Checkpoint must contain a state_dict-compatible mapping.")
-
-    normalized_state: dict[str, Any] = {}
-    for name, tensor in raw_state.items():
-        normalized_name = name.replace("module.", "", 1) if name.startswith("module.") else name
-        normalized_state[normalized_name] = tensor
-    return normalized_state
-
-
 def _load_checkpoint_into_model(model: Any, checkpoint_path: Path, device: torch.device) -> None:
-    state_dict = _normalize_state_dict(load_checkpoint(checkpoint_path, device))
+    state_dict = load_model_state_dict(checkpoint_path, device)
     try:
         model.load_state_dict(state_dict)
     except Exception as exc:  # noqa: BLE001 - surface a clearer path-specific error
         raise RuntimeError(f"Failed to load checkpoint at {checkpoint_path}") from exc
 
 
-def _resolve_class_values(config: dict[str, Any]) -> dict[str, int]:
+def _load_dataset_class(spec: Any):
+    if getattr(spec, "class_name", None) == "ISIC2018Dataset":
+        return ISIC2018Dataset
+    return _load_dataset_class_from_factory(spec)
+
+
+def _resolve_class_values(config: dict[str, Any], spec: Any) -> dict[str, int]:
+    expected = {str(name): int(value) for name, value in spec.class_values.items()}
     for section_name in ("dataset", "data"):
         section = config.get(section_name)
         if isinstance(section, dict) and "class_values" in section:
@@ -59,19 +49,29 @@ def _resolve_class_values(config: dict[str, Any]) -> dict[str, int]:
             if not isinstance(class_values, dict) or not class_values:
                 raise ValueError(f"config.{section_name}.class_values must be a non-empty mapping.")
             normalized = {str(name): int(value) for name, value in class_values.items()}
-            expected_names = sorted(_ISIC_BINARY_CLASS_VALUES)
+            expected_names = sorted(expected)
             if sorted(normalized) != expected_names:
+                if spec.dataset_name == "isic2018":
+                    raise ValueError(
+                        "Geometry export requires binary ISIC class_values with keys "
+                        f"{expected_names}; got {sorted(normalized)}."
+                    )
                 raise ValueError(
-                    "Geometry export requires binary ISIC class_values with keys "
-                    f"{expected_names}; got {sorted(normalized)}."
+                    f"Geometry export requires class_values with keys {expected_names} "
+                    f"for dataset {spec.dataset_name!r}; got {sorted(normalized)}."
                 )
-            if normalized != _ISIC_BINARY_CLASS_VALUES:
+            if normalized != expected:
+                if spec.dataset_name == "isic2018":
+                    raise ValueError(
+                        "Geometry export requires binary ISIC class_values mapping "
+                        f"{expected}; got {normalized}."
+                    )
                 raise ValueError(
-                    "Geometry export requires binary ISIC class_values mapping "
-                    f"{_ISIC_BINARY_CLASS_VALUES}; got {normalized}."
+                    f"Geometry export requires class_values mapping {expected} "
+                    f"for dataset {spec.dataset_name!r}; got {normalized}."
                 )
             return normalized
-    return dict(_ISIC_BINARY_CLASS_VALUES)
+    return dict(expected)
 
 
 def _require_mapping(config: dict[str, Any], key: str, context: str) -> dict[str, Any]:
@@ -151,7 +151,12 @@ def build_embedding_rows(
     rows: list[dict[str, Any]] = []
     for state_name, attr_name in (
         ("pre_adapter", "bottleneck"),
-        ("post_adapter", "adapted_bottleneck"),
+        (
+            "post_adapter",
+            "output_adapter_activation"
+            if getattr(model_output, "output_adapter_activation", None) is not None
+            else "adapted_bottleneck",
+        ),
     ):
         bottleneck = getattr(model_output, attr_name, None)
         if bottleneck is None:
@@ -228,6 +233,16 @@ def write_embedding_csv(
     return output_path
 
 
+def _default_embedding_dims(config: dict[str, Any]) -> dict[str, int]:
+    bottleneck_dim = int(config["model"]["bottleneck_channels"])
+    adapter_placement = str(config.get("adapter", {}).get("placement", "bottleneck"))
+    post_dim = bottleneck_dim if adapter_placement != "output" else bottleneck_dim // 4
+    return {
+        "pre_adapter": bottleneck_dim,
+        "post_adapter": post_dim,
+    }
+
+
 def export_group_geometry(
     config: dict[str, Any],
     group: str,
@@ -236,8 +251,10 @@ def export_group_geometry(
 ) -> tuple[Path, Path]:
     _validate_geometry_export_config(config)
     geometry_config = config.get("geometry", {})
+    dataset_spec = resolve_dataset_spec(config.get("data", {}).get("dataset_name"))
+    dataset_class = _load_dataset_class(dataset_spec)
 
-    class_values = _resolve_class_values(config)
+    class_values = _resolve_class_values(config, dataset_spec)
     include_classes = _resolve_include_classes(geometry_config, class_values)
     min_mask_pixels = int(geometry_config.get("min_mask_pixels", 1))
     batch_size = int(geometry_config.get("batch_size", config["train"]["batch_size"]))
@@ -250,7 +267,7 @@ def export_group_geometry(
         if "pin_memory" in data_config:
             loader_kwargs["pin_memory"] = bool(data_config["pin_memory"])
 
-    dataset = ISIC2018Dataset(
+    dataset = dataset_class(
         images_dir=config["paths"]["val_images_dir"],
         masks_dir=config["paths"]["val_masks_dir"],
         image_size=int(config["data"]["image_size"]),
@@ -276,6 +293,7 @@ def export_group_geometry(
         freeze_encoder=bool(config["model"]["freeze_encoder"]),
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
+        adapter_placement=str(config.get("adapter", {}).get("placement", "bottleneck")),
         node_solver=str(config["node"].get("solver", "euler")),
     )
 
@@ -284,13 +302,19 @@ def export_group_geometry(
     _load_checkpoint_into_model(model, Path(checkpoint_path), device)
     model.eval()
 
-    def _collect_rows(loader: DataLoader) -> list[dict[str, Any]]:
+    def _collect_rows(loader: DataLoader) -> tuple[list[dict[str, Any]], dict[str, int]]:
         rows: list[dict[str, Any]] = []
+        embedding_dims = _default_embedding_dims(config)
         with torch.no_grad():
             for batch in loader:
                 images = batch["image"].float()
                 images = _add_gaussian_noise(images, noise_sigma)
                 model_output = model(images.to(device))
+                embedding_dims["pre_adapter"] = int(model_output.bottleneck.shape[1])
+                post_tensor = getattr(model_output, "output_adapter_activation", None)
+                if post_tensor is None:
+                    post_tensor = model_output.adapted_bottleneck
+                embedding_dims["post_adapter"] = int(post_tensor.shape[1])
                 rows.extend(
                     build_embedding_rows(
                         model_output=model_output,
@@ -301,18 +325,18 @@ def export_group_geometry(
                         min_mask_pixels=min_mask_pixels,
                     )
                 )
-        return rows
+        return rows, embedding_dims
 
     configured_workers = int(loader_kwargs.get("num_workers", 0))
     loader = _build_loader(num_workers_override=None)
     try:
-        all_rows = _collect_rows(loader)
+        all_rows, embedding_dims = _collect_rows(loader)
     except PermissionError as exc:
         if (
             configured_workers > 0
             and _is_known_windows_dataloader_worker_permission_error(exc)
         ):
-            all_rows = _collect_rows(_build_loader(num_workers_override=0))
+            all_rows, embedding_dims = _collect_rows(_build_loader(num_workers_override=0))
         else:
             raise
 
@@ -331,16 +355,17 @@ def export_group_geometry(
         )
     pre_path = geometry_dir / "pre_adapter_embeddings.csv"
     post_path = geometry_dir / "post_adapter_embeddings.csv"
-    embedding_dim = int(config["model"]["bottleneck_channels"])
+    pre_rows = [row for row in all_rows if row["state"] == "pre_adapter"]
+    post_rows = [row for row in all_rows if row["state"] == "post_adapter"]
 
     write_embedding_csv(
-        [row for row in all_rows if row["state"] == "pre_adapter"],
+        pre_rows,
         pre_path,
-        embedding_dim=embedding_dim,
+        embedding_dim=embedding_dims["pre_adapter"],
     )
     write_embedding_csv(
-        [row for row in all_rows if row["state"] == "post_adapter"],
+        post_rows,
         post_path,
-        embedding_dim=embedding_dim,
+        embedding_dim=embedding_dims["post_adapter"],
     )
     return pre_path, post_path

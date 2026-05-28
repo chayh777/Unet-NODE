@@ -10,6 +10,8 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
+from src.utils.io import load_model_state_dict
+
 
 def _get_plotting_libs():
     mpl_config_dir = Path.cwd() / ".matplotlib"
@@ -173,8 +175,6 @@ def run_robustness_experiment(
     all_metrics = []
     for group in groups:
         checkpoint_path = artifacts_dir / f"group_{group.lower()}" / "best.pt"
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Missing checkpoint: {checkpoint_path}")
 
         adapter_type = resolve_group_adapter(group)
         model = build_segmentation_model(
@@ -188,10 +188,11 @@ def run_robustness_experiment(
             freeze_encoder=False,
             node_steps=int(config["node"]["steps"]),
             node_step_size=float(config["node"]["step_size"]),
+            adapter_placement=str(config.get("adapter", {}).get("placement", "bottleneck")),
             node_solver=str(config["node"].get("solver", "euler")),
             adapter_init="default",
         )
-        state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        state = load_model_state_dict(checkpoint_path, device="cpu")
         model.load_state_dict(state)
         model.eval()
         model.to(device)

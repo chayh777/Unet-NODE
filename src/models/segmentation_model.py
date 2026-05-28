@@ -11,12 +11,14 @@ from .node_adapter import NODEAdapter
 
 
 AdapterType = Literal["none", "conv", "node"]
+AdapterPlacement = Literal["bottleneck", "output"]
 
 
 class SegmentationModelOutput(NamedTuple):
     logits: torch.Tensor
     bottleneck: torch.Tensor
     adapted_bottleneck: torch.Tensor
+    output_adapter_activation: torch.Tensor | None = None
 
 
 class _FeatureInfo:
@@ -129,6 +131,7 @@ class SegmentationModel(nn.Module):
         freeze_encoder: bool,
         node_steps: int,
         node_step_size: float,
+        adapter_placement: AdapterPlacement = "bottleneck",
         node_solver: str = "euler",
         adapter_init: AdapterInit = "default",
     ) -> None:
@@ -137,6 +140,12 @@ class SegmentationModel(nn.Module):
         if encoder_weights not in allowed_weights:
             raise ValueError(
                 f"encoder_weights must be one of {allowed_weights}; got {encoder_weights}"
+            )
+        allowed_adapter_placements = {"bottleneck", "output"}
+        if adapter_placement not in allowed_adapter_placements:
+            raise ValueError(
+                "adapter_placement must be one of "
+                f"{allowed_adapter_placements}; got {adapter_placement}"
             )
 
         try:
@@ -154,31 +163,34 @@ class SegmentationModel(nn.Module):
             encoder_channels[-1], bottleneck_channels, kernel_size=1
         )
 
-        if adapter_type == "none":
-            self.adapter = IdentityAdapter()
-        elif adapter_type == "conv":
-            self.adapter = ConvBottleneckAdapter(
-                channels=bottleneck_channels,
-                hidden_channels=adapter_hidden_channels,
-                init=adapter_init,
-            )
-        elif adapter_type == "node":
-            self.adapter = NODEAdapter(
-                channels=bottleneck_channels,
-                hidden_channels=adapter_hidden_channels,
-                steps=node_steps,
-                step_size=node_step_size,
-                init=adapter_init,
-                solver=node_solver,
-            )
-        else:
-            raise ValueError(f"Unknown adapter_type: {adapter_type}")
-
         mid1 = bottleneck_channels // 2
         mid2 = bottleneck_channels // 4
         if mid1 <= 0 or mid2 <= 0:
             raise ValueError(
                 "bottleneck_channels must be >= 4 so decoder channels stay positive."
+            )
+
+        if adapter_placement == "bottleneck":
+            self.adapter = self._build_adapter(
+                adapter_type=adapter_type,
+                channels=bottleneck_channels,
+                hidden_channels=adapter_hidden_channels,
+                node_steps=node_steps,
+                node_step_size=node_step_size,
+                node_solver=node_solver,
+                adapter_init=adapter_init,
+            )
+            self.output_adapter = IdentityAdapter()
+        else:
+            self.adapter = IdentityAdapter()
+            self.output_adapter = self._build_adapter(
+                adapter_type=adapter_type,
+                channels=mid2,
+                hidden_channels=adapter_hidden_channels,
+                node_steps=node_steps,
+                node_step_size=node_step_size,
+                node_solver=node_solver,
+                adapter_init=adapter_init,
             )
 
         self.decoder = nn.Sequential(
@@ -193,12 +205,46 @@ class SegmentationModel(nn.Module):
             for p in self.encoder.parameters():
                 p.requires_grad = False
 
+    def _build_adapter(
+        self,
+        *,
+        adapter_type: AdapterType,
+        channels: int,
+        hidden_channels: int,
+        node_steps: int,
+        node_step_size: float,
+        node_solver: str,
+        adapter_init: AdapterInit,
+    ) -> nn.Module:
+        if adapter_type == "none":
+            return IdentityAdapter()
+        if adapter_type == "conv":
+            return ConvBottleneckAdapter(
+                channels=channels,
+                hidden_channels=hidden_channels,
+                init=adapter_init,
+            )
+        if adapter_type == "node":
+            return NODEAdapter(
+                channels=channels,
+                hidden_channels=hidden_channels,
+                steps=node_steps,
+                step_size=node_step_size,
+                init=adapter_init,
+                solver=node_solver,
+            )
+        raise ValueError(f"Unknown adapter_type: {adapter_type}")
+
     def forward(self, x: torch.Tensor) -> "SegmentationModel.Output":
         features = self.encoder(x)
         bottleneck = self.bottleneck_proj(features[-1])
         adapted_bottleneck = self.adapter(bottleneck)
 
         decoded = self.decoder(adapted_bottleneck)
+        decoded = self.output_adapter(decoded)
+        output_adapter_activation = (
+            decoded if not isinstance(self.output_adapter, IdentityAdapter) else None
+        )
         logits = self.head(decoded)
         logits = F.interpolate(
             logits, size=x.shape[-2:], mode="bilinear", align_corners=False
@@ -208,6 +254,7 @@ class SegmentationModel(nn.Module):
             logits=logits,
             bottleneck=bottleneck,
             adapted_bottleneck=adapted_bottleneck,
+            output_adapter_activation=output_adapter_activation,
         )
 
 

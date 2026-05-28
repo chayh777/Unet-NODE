@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from importlib import util
+import json
 from pathlib import Path
 import sys
 from types import ModuleType
+
+import pytest
 
 
 def _ensure_package(name: str, package_path: Path) -> None:
@@ -67,11 +70,12 @@ def test_run_low_data_geometry_cli_loads_config_and_wires_export_and_plot(
 
     geometry_module = ModuleType("src.analysis.low_data_geometry")
 
-    def export_group_geometry(*, config, group, checkpoint_path):
+    def export_group_geometry(*, config, group, checkpoint_path, noise_sigma):
         calls["export"] = {
             "config": config,
             "group": group,
             "checkpoint_path": Path(checkpoint_path),
+            "noise_sigma": noise_sigma,
         }
         return (
             tmp_path / "artifacts" / "group_b" / "geometry" / "pre_adapter_embeddings.csv",
@@ -106,6 +110,7 @@ def test_run_low_data_geometry_cli_loads_config_and_wires_export_and_plot(
     assert calls["export"]["checkpoint_path"] == (
         tmp_path / "artifacts" / "group_b" / "best.pt"
     )
+    assert calls["export"]["noise_sigma"] == 0.0
     assert calls["plot"]["pre_csv"].name == "pre_adapter_embeddings.csv"
     assert calls["plot"]["post_csv"].name == "post_adapter_embeddings.csv"
     assert calls["plot"]["output_dir"] == (
@@ -211,3 +216,95 @@ def test_plot_report_results_cli_passes_args_to_writer(
         "artifacts_dir": tmp_path / "artifacts",
         "output_dir": tmp_path / "figures",
     }
+
+
+def test_run_low_data_experiment_cli_handles_glas_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_dir = repo_root / "src"
+    experiments_dir = src_dir / "experiments"
+
+    _ensure_package("src", src_dir)
+    _ensure_package("src.experiments", experiments_dir)
+
+    calls: dict[str, object] = {}
+    runner_module = ModuleType("src.experiments.low_data_runner")
+
+    def run_group(config_path, group):
+        calls["run_group"] = {"config_path": Path(config_path), "group": group}
+        return tmp_path / "artifacts" / "group_c" / "best.pt"
+
+    runner_module.run_group = run_group
+    monkeypatch.setitem(sys.modules, "src.experiments.low_data_runner", runner_module)
+
+    module = _load_script_module(
+        "scripts.run_low_data_experiment", "scripts/run_low_data_experiment.py"
+    )
+    glas_config = tmp_path / "glas_config.yaml"
+    glas_config.write_text("seed: 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_low_data_experiment.py",
+            "--config",
+            str(glas_config),
+            "--group",
+            "C",
+        ],
+    )
+
+    module.main()
+
+    assert calls["run_group"] == {"config_path": glas_config, "group": "C"}
+
+
+def test_run_low_data_geometry_cli_fails_clearly_without_saved_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_dir = repo_root / "src"
+    experiments_dir = src_dir / "experiments"
+    analysis_dir = src_dir / "analysis"
+
+    _ensure_package("src", src_dir)
+    _ensure_package("src.experiments", experiments_dir)
+    _ensure_package("src.analysis", analysis_dir)
+
+    artifacts_dir = tmp_path / "artifacts"
+    group_dir = artifacts_dir / "group_c"
+    group_dir.mkdir(parents=True, exist_ok=True)
+    (group_dir / "metrics.json").write_text(
+        json.dumps({"checkpoint_saved": False, "best_checkpoint": None}),
+        encoding="utf-8",
+    )
+
+    runner_module = ModuleType("src.experiments.low_data_runner")
+    runner_module.load_config = lambda config_path: {
+        "paths": {"artifacts_dir": str(artifacts_dir)}
+    }
+    monkeypatch.setitem(sys.modules, "src.experiments.low_data_runner", runner_module)
+
+    geometry_module = ModuleType("src.analysis.low_data_geometry")
+    geometry_module.export_group_geometry = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("export_group_geometry should not be called without a checkpoint")
+    )
+    monkeypatch.setitem(sys.modules, "src.analysis.low_data_geometry", geometry_module)
+
+    reduce_module = ModuleType("src.analysis.reduce_and_plot")
+    reduce_module.run_low_data_geometry_plot = lambda **kwargs: None
+    monkeypatch.setitem(sys.modules, "src.analysis.reduce_and_plot", reduce_module)
+
+    module = _load_script_module(
+        "scripts.run_low_data_geometry", "scripts/run_low_data_geometry.py"
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_low_data_geometry.py", "--config", "config.yaml", "--group", "C"],
+    )
+
+    with pytest.raises(FileNotFoundError, match=r"train\.save_best_checkpoint: false"):
+        module.main()

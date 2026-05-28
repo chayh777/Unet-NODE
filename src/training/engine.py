@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -218,6 +219,7 @@ def fit(
     patience: int,
     output_dir: str | Path,
     device: str | torch.device = "cpu",
+    save_best_checkpoint: bool = True,
 ) -> Path | None:
     output_dir_p = Path(output_dir)
     output_dir_p.mkdir(parents=True, exist_ok=True)
@@ -227,9 +229,11 @@ def fit(
 
     history: list[EpochMetrics] = []
     best_dice: float | None = None
+    best_epoch: int | None = None
     best_path = output_dir_p / "best.pt"
     best_saved = False
     stale_epochs = 0
+    start_time = time.perf_counter()
 
     for epoch in range(1, int(epochs) + 1):
         train_metrics = run_epoch(
@@ -260,9 +264,11 @@ def fit(
         improved = math.isfinite(epoch_val_dice) and (best_dice is None or epoch_val_dice > best_dice)
         if improved:
             best_dice = epoch_val_dice
-            best_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(model.state_dict(), best_path)
-            best_saved = True
+            best_epoch = epoch
+            if save_best_checkpoint:
+                best_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(model.state_dict(), best_path)
+                best_saved = True
             stale_epochs = 0
         else:
             stale_epochs += 1
@@ -270,12 +276,18 @@ def fit(
         if (not improved) and stale_epochs >= int(patience):
             break
 
+    duration_sec = time.perf_counter() - start_time
+    epochs_ran = len(history)
     save_history(history, output_dir_p / "history.csv")
     save_metrics_json(
         {
-            "best_val_dice": best_dice if best_saved else None,
-            "epochs_ran": len(history),
+            "best_val_dice": best_dice,
+            "best_epoch": best_epoch,
+            "epochs_ran": epochs_ran,
             "best_checkpoint": str(best_path) if best_saved else None,
+            "checkpoint_saved": best_saved,
+            "duration_sec": duration_sec,
+            "avg_epoch_sec": duration_sec / max(1, epochs_ran),
         },
         output_dir_p / "metrics.json",
     )

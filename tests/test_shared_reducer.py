@@ -161,6 +161,75 @@ def test_run_low_data_geometry_plot_writes_shared_projection_outputs(tmp_path):
     assert set(metrics["state"]) == {"pre_adapter", "post_adapter"}
 
 
+def test_run_low_data_geometry_plot_handles_mismatched_embedding_columns(tmp_path):
+    pre_csv = tmp_path / "pre_adapter_embeddings.csv"
+    post_csv = tmp_path / "post_adapter_embeddings.csv"
+    output_dir = tmp_path / "geometry"
+
+    pd.DataFrame(
+        [
+            {
+                "sample_id": "pre_1",
+                "state": "pre_adapter",
+                "class_name": "lesion",
+                "pixel_count": 3,
+                "embedding_0000": 0.0,
+                "embedding_0001": 0.5,
+                "embedding_0002": 1.0,
+                "embedding_0003": 1.5,
+            },
+            {
+                "sample_id": "pre_2",
+                "state": "pre_adapter",
+                "class_name": "background",
+                "pixel_count": 5,
+                "embedding_0000": 2.0,
+                "embedding_0001": 2.5,
+                "embedding_0002": 3.0,
+                "embedding_0003": 3.5,
+            },
+        ]
+    ).to_csv(pre_csv, index=False)
+    pd.DataFrame(
+        [
+            {
+                "sample_id": "post_1",
+                "state": "post_adapter",
+                "class_name": "lesion",
+                "pixel_count": 4,
+                "embedding_0000": 4.0,
+                "embedding_0001": 4.5,
+            },
+            {
+                "sample_id": "post_2",
+                "state": "post_adapter",
+                "class_name": "background",
+                "pixel_count": 6,
+                "embedding_0000": 5.0,
+                "embedding_0001": 5.5,
+            },
+        ]
+    ).to_csv(post_csv, index=False)
+
+    returned_dir = reduce_module.run_low_data_geometry_plot(
+        pre_csv=pre_csv,
+        post_csv=post_csv,
+        output_dir=output_dir,
+        pca_components=2,
+        umap_neighbors=2,
+        umap_min_dist=0.1,
+        random_state=42,
+        alpha=0.7,
+        point_size=30,
+        dpi=72,
+    )
+
+    assert returned_dir == output_dir
+    projected = pd.read_csv(output_dir / "shared_projection_points.csv")
+    assert set(projected["state"]) == {"pre_adapter", "post_adapter"}
+    assert projected[["x", "y"]].notna().all().all()
+
+
 def test_density_axis_falls_back_to_scatter_when_kdeplot_raises(monkeypatch):
     calls = {"scatter": 0}
 

@@ -173,7 +173,8 @@ def build_shared_projection(df, pca_components, umap_neighbors, umap_min_dist, r
     if not embedding_columns:
         raise ValueError("No embedding columns found in input dataframe.")
 
-    matrix = df[embedding_columns].to_numpy()
+    aligned_embeddings = df[embedding_columns].fillna(0.0)
+    matrix = aligned_embeddings.to_numpy()
     n_components = min(pca_components, matrix.shape[0], matrix.shape[1])
     if n_components < 1:
         raise ValueError("PCA requires at least one component.")
@@ -198,6 +199,7 @@ def build_shared_projection(df, pca_components, umap_neighbors, umap_min_dist, r
         coords = reduced[:, :2] if reduced.shape[1] >= 2 else np.pad(reduced, ((0, 0), (0, 2 - reduced.shape[1])))
 
     projected = df.copy()
+    projected.loc[:, embedding_columns] = aligned_embeddings
     projected["x"] = coords[:, 0]
     projected["y"] = coords[:, 1]
     return projected

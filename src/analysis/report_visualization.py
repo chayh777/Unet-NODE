@@ -51,6 +51,12 @@ def summarize_run(
     best_idx = (history["val_dice"] - best_dice).abs().idxmin()
     best_row = history.loc[int(best_idx)]
     final_row = history.iloc[-1]
+    duration_sec = metrics.get("duration_sec")
+    avg_epoch_sec = metrics.get("avg_epoch_sec")
+    best_checkpoint = metrics.get("best_checkpoint")
+    checkpoint_saved = metrics.get("checkpoint_saved")
+    if checkpoint_saved is None:
+        checkpoint_saved = bool(best_checkpoint)
 
     return {
         "method": method,
@@ -63,6 +69,10 @@ def summarize_run(
         "final_dice": float(final_row["val_dice"]),
         "peak_final_gap": best_dice - float(final_row["val_dice"]),
         "epochs_ran": int(metrics.get("epochs_ran", len(history))),
+        "duration_sec": float(duration_sec) if duration_sec is not None else None,
+        "avg_epoch_sec": float(avg_epoch_sec) if avg_epoch_sec is not None else None,
+        "checkpoint_saved": bool(checkpoint_saved),
+        "best_checkpoint": best_checkpoint,
         "root": str(root),
     }
 
@@ -81,6 +91,26 @@ _MULTISEED_ORDER = [
     "C-zero-last-steps16",
 ]
 
+_COMPARISON_METHOD_ORDER = [
+    "Plain-U-Net",
+    "B-base",
+    "Output-Conv-U-Net",
+    "Output-NODE-U-Net",
+]
+
+_REPORT_METHOD_ORDER = [
+    *_COMPARISON_METHOD_ORDER,
+    "C-fine-steps8-default",
+    "C-zero-last-steps8",
+    "C-zero-last-steps16",
+]
+
+_COMPARISON_RUNS = [
+    ("Plain-U-Net", "low_data", None, "group_a"),
+    ("Output-Conv-U-Net", "low_data_output", "conv_b_seed*", "group_b"),
+    ("Output-NODE-U-Net", "low_data_output", "node_c_seed*", "group_c"),
+]
+
 
 def _parse_seed(run_name: str) -> int | None:
     marker = "_seed"
@@ -97,15 +127,28 @@ def _method_for_multiseed_run(run_name: str) -> str | None:
     return None
 
 
-def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    artifacts_dir = Path(artifacts_dir)
-    roots = sorted((artifacts_dir / "low_data_multiseed").glob("*/group_*"))
-    rows: list[dict[str, Any]] = []
-    for root in roots:
+def _iter_report_runs(artifacts_dir: Path):
+    for root in sorted((artifacts_dir / "low_data_multiseed").glob("*/group_*")):
         run_name = root.parent.name
         method = _method_for_multiseed_run(run_name)
         if method is None:
             continue
+        yield method, run_name, root
+
+    for method, relative_parent, run_pattern, group_name in _COMPARISON_RUNS:
+        if run_pattern is None:
+            root = artifacts_dir / relative_parent / group_name
+            if root.exists():
+                yield method, relative_parent, root
+            continue
+        for root in sorted((artifacts_dir / relative_parent).glob(f"{run_pattern}/{group_name}")):
+            yield method, root.parent.name, root
+
+
+def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    artifacts_dir = Path(artifacts_dir)
+    rows: list[dict[str, Any]] = []
+    for method, run_name, root in _iter_report_runs(artifacts_dir):
         rows.append(
             summarize_run(
                 root=root,
@@ -128,11 +171,15 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
             "final_dice",
             "peak_final_gap",
             "epochs_ran",
+            "duration_sec",
+            "avg_epoch_sec",
+            "checkpoint_saved",
+            "best_checkpoint",
             "root",
         ]
         return pd.DataFrame(columns=columns), pd.DataFrame()
 
-    runs["method"] = pd.Categorical(runs["method"], categories=_MULTISEED_ORDER, ordered=True)
+    runs["method"] = pd.Categorical(runs["method"], categories=_REPORT_METHOD_ORDER, ordered=True)
     runs = runs.sort_values(["method", "seed"]).reset_index(drop=True)
     runs["method"] = runs["method"].astype(str)
 
@@ -149,10 +196,15 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
             best_iou_mean=("best_iou", "mean"),
             best_epoch_mean=("best_epoch", "mean"),
             epochs_ran_mean=("epochs_ran", "mean"),
+            duration_sec_mean=("duration_sec", "mean"),
+            duration_sec_std=("duration_sec", "std"),
+            avg_epoch_sec_mean=("avg_epoch_sec", "mean"),
+            avg_epoch_sec_std=("avg_epoch_sec", "std"),
+            checkpoint_saved_rate=("checkpoint_saved", "mean"),
         )
         .reset_index()
     )
-    summary["method"] = pd.Categorical(summary["method"], categories=_MULTISEED_ORDER, ordered=True)
+    summary["method"] = pd.Categorical(summary["method"], categories=_REPORT_METHOD_ORDER, ordered=True)
     summary = summary.sort_values("method").reset_index(drop=True)
     summary["method"] = summary["method"].astype(str)
     return runs, summary
@@ -197,6 +249,10 @@ def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
                 "final_dice",
                 "peak_final_gap",
                 "epochs_ran",
+                "duration_sec",
+                "avg_epoch_sec",
+                "checkpoint_saved",
+                "best_checkpoint",
                 "root",
             ]
         )
@@ -204,7 +260,10 @@ def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
 
 
 _COLORS = {
+    "Plain-U-Net": "#59a14f",
     "B-base": "#7a7a7a",
+    "Output-Conv-U-Net": "#f28e2b",
+    "Output-NODE-U-Net": "#4e79a7",
     "C-fine-steps8-default": "#377eb8",
     "C-zero-last-steps8": "#e15759",
     "C-zero-last-steps16": "#984ea3",
@@ -214,7 +273,11 @@ _COLORS = {
 
 
 def _method_order(methods: list[str]) -> list[str]:
-    return [method for method in _MULTISEED_ORDER if method in set(methods)]
+    seen_methods = list(dict.fromkeys(methods))
+    ordered_methods = [method for method in _REPORT_METHOD_ORDER if method in seen_methods]
+    ordered_set = set(ordered_methods)
+    ordered_methods.extend(method for method in seen_methods if method not in ordered_set)
+    return ordered_methods
 
 
 def _save_bar_with_points(

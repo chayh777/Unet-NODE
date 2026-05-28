@@ -200,9 +200,23 @@ def _validate_low_data_config(config: dict[str, Any]) -> None:
 
     adapter = _require_mapping(config, "adapter", "config")
     _require_keys(adapter, ["hidden_channels"], "config.adapter")
+    _resolve_adapter_placement(config)
 
     node = _require_mapping(config, "node", "config")
-    _require_keys(node, ["steps", "step_size", "solver"], "config.node")
+    _require_keys(node, ["steps", "step_size"], "config.node")
+
+
+def _resolve_adapter_placement(config: dict[str, Any]) -> str:
+    adapter = config.get("adapter", {})
+    if not isinstance(adapter, dict):
+        return "bottleneck"
+    value = adapter.get("placement", "bottleneck")
+    if value not in {"bottleneck", "output"}:
+        raise ValueError(
+            "config.adapter.placement must be one of ['bottleneck', 'output']; "
+            f"got {value!r}."
+        )
+    return str(value)
 
 
 def _resolve_adapter_init(config: dict[str, Any]) -> str:
@@ -246,30 +260,22 @@ def run_group(config_path: str | Path, group: str):
     config = load_config(config_path)
     _validate_low_data_config(config)
     adapter_type = resolve_group_adapter(group)
+    adapter_placement = _resolve_adapter_placement(config)
     adapter_init = _resolve_adapter_init(config)
 
     # Local imports keep module import lightweight; validation happens before any heavy imports.
     import torch
     from torch.utils.data import DataLoader
 
-    from src.data.isic2018 import ISIC2018Dataset
-    from src.data.splits import build_ratio_subset, save_split_manifest
+    from src.data.factory import build_low_data_datasets
+    from src.data.splits import save_split_manifest
     from src.models.segmentation_model import build_segmentation_model
     from src.training.engine import fit
 
-    full_train_dataset = ISIC2018Dataset(
-        images_dir=config["paths"]["train_images_dir"],
-        masks_dir=config["paths"]["train_masks_dir"],
-        image_size=config["data"]["image_size"],
-        class_values={"background": 0, "lesion": 1},
-        sample_ids=None,
-    )
-
-    selected_ids = build_ratio_subset(
-        [path.stem for path in full_train_dataset.image_paths],
-        ratio=float(config["data"]["train_ratio"]),
-        seed=int(config["seed"]),
-    )
+    datasets = build_low_data_datasets(config)
+    train_dataset = datasets.train_dataset
+    val_dataset = datasets.val_dataset
+    selected_ids = datasets.selected_ids
 
     ratio_pct = int(round(float(config["data"]["train_ratio"]) * 100))
     split_manifest_path = (
@@ -279,21 +285,6 @@ def run_group(config_path: str | Path, group: str):
     )
     split_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     save_split_manifest(selected_ids, split_manifest_path)
-
-    train_dataset = ISIC2018Dataset(
-        images_dir=config["paths"]["train_images_dir"],
-        masks_dir=config["paths"]["train_masks_dir"],
-        image_size=config["data"]["image_size"],
-        class_values={"background": 0, "lesion": 1},
-        sample_ids=selected_ids,
-    )
-    val_dataset = ISIC2018Dataset(
-        images_dir=config["paths"]["val_images_dir"],
-        masks_dir=config["paths"]["val_masks_dir"],
-        image_size=config["data"]["image_size"],
-        class_values={"background": 0, "lesion": 1},
-        sample_ids=None,
-    )
 
     batch_size = int(config["train"]["batch_size"])
     loader_kwargs = {}
@@ -326,6 +317,7 @@ def run_group(config_path: str | Path, group: str):
         node_steps=int(config["node"]["steps"]),
         node_step_size=float(config["node"]["step_size"]),
         node_solver=str(config["node"].get("solver", "euler")),
+        adapter_placement=adapter_placement,
         adapter_init=adapter_init,
     )
 
@@ -354,6 +346,7 @@ def run_group(config_path: str | Path, group: str):
 
     output_dir = Path(config["paths"]["artifacts_dir"]) / f"group_{group.lower()}"
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_best_checkpoint = bool(config["train"].get("save_best_checkpoint", True))
 
     train_loader, val_loader = _build_loaders(num_workers_override=None)
     try:
@@ -366,6 +359,7 @@ def run_group(config_path: str | Path, group: str):
             int(config["train"]["early_stopping_patience"]),
             output_dir,
             device=device,
+            save_best_checkpoint=save_best_checkpoint,
         )
     except PermissionError as exc:
         configured_workers = int(loader_kwargs.get("num_workers", 0))
@@ -385,5 +379,6 @@ def run_group(config_path: str | Path, group: str):
                 int(config["train"]["early_stopping_patience"]),
                 output_dir,
                 device=device,
+                save_best_checkpoint=save_best_checkpoint,
             )
         raise

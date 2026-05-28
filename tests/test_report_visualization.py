@@ -7,17 +7,31 @@ import pandas as pd
 import pytest
 
 
-def _write_run(root: Path, *, best: float, rows: list[dict[str, float | int]]) -> None:
+def _write_run(
+    root: Path,
+    *,
+    best: float,
+    rows: list[dict[str, float | int]],
+    duration_sec: float | None = None,
+    avg_epoch_sec: float | None = None,
+    checkpoint_saved: bool | None = None,
+    best_checkpoint: str | None = None,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(root / "history.csv", index=False)
+    metrics = {
+        "best_val_dice": best,
+        "epochs_ran": len(rows),
+        "best_checkpoint": best_checkpoint if best_checkpoint is not None else str(root / "best.pt"),
+    }
+    if duration_sec is not None:
+        metrics["duration_sec"] = duration_sec
+    if avg_epoch_sec is not None:
+        metrics["avg_epoch_sec"] = avg_epoch_sec
+    if checkpoint_saved is not None:
+        metrics["checkpoint_saved"] = checkpoint_saved
     (root / "metrics.json").write_text(
-        json.dumps(
-            {
-                "best_val_dice": best,
-                "epochs_ran": len(rows),
-                "best_checkpoint": str(root / "best.pt"),
-            }
-        ),
+        json.dumps(metrics),
         encoding="utf-8",
     )
 
@@ -49,8 +63,38 @@ def test_summarize_run_reads_best_final_and_gap(tmp_path: Path) -> None:
         "final_dice": 0.75,
         "peak_final_gap": pytest.approx(0.03),
         "epochs_ran": 3,
+        "duration_sec": None,
+        "avg_epoch_sec": None,
+        "checkpoint_saved": True,
+        "best_checkpoint": str(root / "best.pt"),
         "root": str(root),
     }
+
+
+def test_summarize_run_carries_timing_and_checkpoint_metrics(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import summarize_run
+
+    root = tmp_path / "exp" / "group_b"
+    _write_run(
+        root,
+        best=0.74,
+        duration_sec=90.0,
+        avg_epoch_sec=30.0,
+        checkpoint_saved=False,
+        best_checkpoint="",
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.54},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.74, "val_iou": 0.59},
+            {"epoch": 3, "train_loss": 0.8, "val_loss": 0.7, "val_dice": 0.72, "val_iou": 0.57},
+        ],
+    )
+
+    row = summarize_run(root=root, method="Method", run="exp", seed=2)
+
+    assert row["duration_sec"] == 90.0
+    assert row["avg_epoch_sec"] == 30.0
+    assert row["checkpoint_saved"] is False
+    assert row["best_checkpoint"] == ""
 
 
 def test_build_multiseed_tables_collects_known_methods(tmp_path: Path) -> None:
@@ -80,6 +124,133 @@ def test_build_multiseed_tables_collects_known_methods(tmp_path: Path) -> None:
     assert runs["seed"].tolist() == [0, 0]
     assert summary["method"].tolist() == ["B-base", "C-zero-last-steps8"]
     assert summary.loc[summary["method"] == "C-zero-last-steps8", "best_dice_mean"].iloc[0] == 0.75
+
+
+def test_build_multiseed_tables_ingests_comparison_method_runs(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data" / "group_a",
+        best=0.69,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.68, "val_iou": 0.49},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.69, "val_iou": 0.50},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed0" / "group_b",
+        best=0.70,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.68, "val_iou": 0.48},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_output" / "conv_b_seed42" / "group_b",
+        best=0.71,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.51},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.71, "val_iou": 0.52},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_output" / "node_c_seed42" / "group_c",
+        best=0.73,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.72, "val_iou": 0.54},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.73, "val_iou": 0.55},
+        ],
+    )
+
+    runs, summary = build_multiseed_tables(artifacts_dir)
+
+    assert runs["method"].tolist() == [
+        "Plain-U-Net",
+        "B-base",
+        "Output-Conv-U-Net",
+        "Output-NODE-U-Net",
+    ]
+    assert pd.isna(runs["seed"].iloc[0])
+    assert runs["seed"].iloc[1:].tolist() == [0, 42, 42]
+    assert summary["method"].tolist() == [
+        "Plain-U-Net",
+        "B-base",
+        "Output-Conv-U-Net",
+        "Output-NODE-U-Net",
+    ]
+
+
+def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed0" / "group_b",
+        best=0.70,
+        duration_sec=100.0,
+        avg_epoch_sec=50.0,
+        checkpoint_saved=False,
+        best_checkpoint="",
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.70, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.68, "val_iou": 0.48},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed1" / "group_b",
+        best=0.72,
+        duration_sec=120.0,
+        avg_epoch_sec=60.0,
+        checkpoint_saved=True,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.71, "val_iou": 0.52},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.72, "val_iou": 0.53},
+        ],
+    )
+
+    runs, summary = build_multiseed_tables(artifacts_dir)
+
+    assert runs["duration_sec"].tolist() == [100.0, 120.0]
+    assert runs["avg_epoch_sec"].tolist() == [50.0, 60.0]
+    assert runs["checkpoint_saved"].tolist() == [False, True]
+    b_base = summary.loc[summary["method"] == "B-base"].iloc[0]
+    assert b_base["duration_sec_mean"] == 110.0
+    assert b_base["avg_epoch_sec_mean"] == 55.0
+    assert b_base["checkpoint_saved_rate"] == 0.5
+
+
+def test_method_order_groups_comparison_methods_before_c_series_and_keeps_legacy_subsets() -> None:
+    from src.analysis.report_visualization import _method_order
+
+    assert _method_order(
+        [
+            "Output-NODE-U-Net",
+            "C-zero-last-steps16",
+            "B-base",
+            "C-fine-steps8-default",
+            "Plain-U-Net",
+            "C-zero-last-steps8",
+            "Output-Conv-U-Net",
+        ]
+    ) == [
+        "Plain-U-Net",
+        "B-base",
+        "Output-Conv-U-Net",
+        "Output-NODE-U-Net",
+        "C-fine-steps8-default",
+        "C-zero-last-steps8",
+        "C-zero-last-steps16",
+    ]
+    assert _method_order(
+        [
+            "C-zero-last-steps8",
+            "B-base",
+        ]
+    ) == [
+        "B-base",
+        "C-zero-last-steps8",
+    ]
 
 
 def test_build_steps_ablation_table_collects_default_and_zero_last(tmp_path: Path) -> None:

@@ -85,6 +85,7 @@ def _make_valid_geometry_config(tmp_path: Path) -> dict:
         "node": {
             "steps": 4,
             "step_size": 0.25,
+            "solver": "euler",
         },
         "geometry": {
             "batch_size": 1,
@@ -143,6 +144,41 @@ def test_build_embedding_rows_copies_embeddings_for_single_pixel_mask():
             "class_name": "lesion",
             "pixel_count": 1,
             "embedding": [3.5, 4.5],
+        },
+    ]
+
+
+def test_build_embedding_rows_uses_output_adapter_activation_for_output_placement():
+    module = _load_low_data_geometry_module()
+    model_output = SimpleNamespace(
+        bottleneck=torch.tensor([[[[1.5]], [[2.5]], [[3.5]], [[4.5]]]]),
+        adapted_bottleneck=torch.tensor([[[[10.0]], [[20.0]], [[30.0]], [[40.0]]]]),
+        output_adapter_activation=torch.tensor([[[[7.0]], [[8.0]]]]),
+    )
+
+    rows = module.build_embedding_rows(
+        model_output=model_output,
+        mask=torch.tensor([[[1]]], dtype=torch.long),
+        sample_ids=["sample_1"],
+        include_classes=["lesion"],
+        class_values={"lesion": 1},
+        min_mask_pixels=1,
+    )
+
+    assert rows == [
+        {
+            "sample_id": "sample_1",
+            "state": "pre_adapter",
+            "class_name": "lesion",
+            "pixel_count": 1,
+            "embedding": [1.5, 2.5, 3.5, 4.5],
+        },
+        {
+            "sample_id": "sample_1",
+            "state": "post_adapter",
+            "class_name": "lesion",
+            "pixel_count": 1,
+            "embedding": [7.0, 8.0],
         },
     ]
 
@@ -261,17 +297,17 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
         calls["build_segmentation_model"] = dict(kwargs)
         return _FakeModel()
 
-    def _fake_load_checkpoint(path, device):
-        calls["load_checkpoint"] = {
+    def _fake_load_model_state_dict(path, device):
+        calls["load_model_state_dict"] = {
             "path": Path(path),
             "device": str(device),
         }
-        return {"state_dict": {"module.weight": torch.tensor([1.0])}}
+        return {"weight": torch.tensor([1.0])}
 
     monkeypatch.setattr(module, "ISIC2018Dataset", _FakeDataset)
     monkeypatch.setattr(module, "DataLoader", _FakeLoader)
     monkeypatch.setattr(module, "build_segmentation_model", _fake_build_segmentation_model)
-    monkeypatch.setattr(module, "load_checkpoint", _fake_load_checkpoint)
+    monkeypatch.setattr(module, "load_model_state_dict", _fake_load_model_state_dict)
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
     config = _make_valid_geometry_config(tmp_path)
@@ -320,7 +356,127 @@ def test_export_group_geometry_writes_pre_and_post_adapter_csvs(tmp_path, monkey
     assert calls["loader"]["kwargs"] == {"num_workers": 2, "pin_memory": True}
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert calls["build_segmentation_model"]["adapter_init"] == "zero_last_layer"
-    assert calls["load_checkpoint"]["path"] == checkpoint_path
+    assert calls["load_model_state_dict"]["path"] == checkpoint_path
+
+
+def test_export_group_geometry_supports_output_adapter_embeddings(tmp_path, monkeypatch):
+    module = _load_low_data_geometry_module()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+
+    calls = {}
+
+    class _FakeDataset:
+        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
+            self.images_dir = images_dir
+            self.masks_dir = masks_dir
+            self.image_size = image_size
+            self.class_values = class_values
+            self.sample_ids = sample_ids
+
+    class _FakeLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            self._batches = [
+                {
+                    "sample_id": ["sample_1"],
+                    "image": torch.zeros((1, 3, 1, 1), dtype=torch.float32),
+                    "mask": torch.tensor([[[1]]], dtype=torch.long),
+                }
+            ]
+
+        def __iter__(self):
+            return iter(self._batches)
+
+    class _FakeModel:
+        def load_state_dict(self, state_dict):
+            self.loaded_state = dict(state_dict)
+
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, images):
+            return SimpleNamespace(
+                bottleneck=torch.tensor([[[[1.0]], [[2.0]], [[3.0]], [[4.0]]]]),
+                adapted_bottleneck=torch.tensor([[[[10.0]], [[20.0]], [[30.0]], [[40.0]]]]),
+                output_adapter_activation=torch.tensor([[[[100.0]], [[200.0]]]]),
+            )
+
+    def _fake_build_segmentation_model(**kwargs):
+        calls["build_segmentation_model"] = dict(kwargs)
+        return _FakeModel()
+
+    monkeypatch.setattr(module, "ISIC2018Dataset", _FakeDataset)
+    monkeypatch.setattr(module, "DataLoader", _FakeLoader)
+    monkeypatch.setattr(module, "build_segmentation_model", _fake_build_segmentation_model)
+    monkeypatch.setattr(
+        module,
+        "load_model_state_dict",
+        lambda path, device: {"weight": torch.tensor([1.0])},
+    )
+    monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
+
+    config = _make_valid_geometry_config(tmp_path)
+    config["model"]["bottleneck_channels"] = 4
+    config["adapter"]["placement"] = "output"
+    config["data"]["num_workers"] = 0
+
+    pre_path, post_path = module.export_group_geometry(
+        config=config,
+        group="C",
+        checkpoint_path=checkpoint_path,
+    )
+
+    with pre_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == [
+            "sample_id",
+            "state",
+            "class_name",
+            "pixel_count",
+            "embedding_0000",
+            "embedding_0001",
+            "embedding_0002",
+            "embedding_0003",
+        ]
+        assert list(reader) == [
+            {
+                "sample_id": "sample_1",
+                "state": "pre_adapter",
+                "class_name": "lesion",
+                "pixel_count": "1",
+                "embedding_0000": "1.0",
+                "embedding_0001": "2.0",
+                "embedding_0002": "3.0",
+                "embedding_0003": "4.0",
+            }
+        ]
+
+    with post_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == [
+            "sample_id",
+            "state",
+            "class_name",
+            "pixel_count",
+            "embedding_0000",
+            "embedding_0001",
+        ]
+        assert list(reader) == [
+            {
+                "sample_id": "sample_1",
+                "state": "post_adapter",
+                "class_name": "lesion",
+                "pixel_count": "1",
+                "embedding_0000": "100.0",
+                "embedding_0001": "200.0",
+            }
+        ]
+
+    assert calls["build_segmentation_model"]["adapter_placement"] == "output"
 
 
 def test_export_group_geometry_validates_required_train_batch_size(tmp_path):
@@ -337,6 +493,34 @@ def test_export_group_geometry_validates_required_train_batch_size(tmp_path):
             config=config,
             group="A",
             checkpoint_path=tmp_path / "checkpoint.pt",
+        )
+
+
+def test_export_group_geometry_raises_clear_missing_checkpoint_error(tmp_path):
+    module = _load_low_data_geometry_module()
+    config = _make_valid_geometry_config(tmp_path)
+    config["node"]["solver"] = "euler"
+    missing_checkpoint = tmp_path / "missing.pt"
+
+    class _FakeDataset:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class _FakeModel:
+        def to(self, device):
+            return self
+
+    module.ISIC2018Dataset = _FakeDataset
+    module.build_segmentation_model = lambda **kwargs: _FakeModel()
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"Checkpoint not found at .*missing\.pt.*train\.save_best_checkpoint: false",
+    ):
+        module.export_group_geometry(
+            config=config,
+            group="A",
+            checkpoint_path=missing_checkpoint,
         )
 
 
@@ -434,8 +618,8 @@ def test_export_group_geometry_preserves_embedding_columns_for_empty_exports(
     monkeypatch.setattr(module, "build_segmentation_model", lambda **kwargs: _FakeModel())
     monkeypatch.setattr(
         module,
-        "load_checkpoint",
-        lambda path, device: {"state_dict": {"module.weight": torch.tensor([1.0])}},
+        "load_model_state_dict",
+        lambda path, device: {"weight": torch.tensor([1.0])},
     )
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
@@ -460,6 +644,94 @@ def test_export_group_geometry_preserves_embedding_columns_for_empty_exports(
                 "embedding_0001",
             ]
             assert list(reader) == []
+
+
+def test_export_group_geometry_handles_empty_loader_for_output_adapter_dims(
+    tmp_path, monkeypatch
+):
+    module = _load_low_data_geometry_module()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+
+    class _FakeDataset:
+        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
+            self.images_dir = images_dir
+            self.masks_dir = masks_dir
+            self.image_size = image_size
+            self.class_values = class_values
+            self.sample_ids = sample_ids
+
+    class _EmptyLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            self.dataset = dataset
+            self.batch_size = batch_size
+            self.shuffle = shuffle
+            self.kwargs = kwargs
+
+        def __iter__(self):
+            return iter(())
+
+    class _FakeModel:
+        def load_state_dict(self, state_dict):
+            self.loaded_state = dict(state_dict)
+
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(module, "ISIC2018Dataset", _FakeDataset)
+    monkeypatch.setattr(module, "DataLoader", _EmptyLoader)
+    monkeypatch.setattr(module, "build_segmentation_model", lambda **kwargs: _FakeModel())
+    monkeypatch.setattr(
+        module,
+        "load_model_state_dict",
+        lambda path, device: {"weight": torch.tensor([1.0])},
+    )
+    monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
+
+    config = _make_valid_geometry_config(tmp_path)
+    config["data"]["num_workers"] = 0
+    config["model"]["bottleneck_channels"] = 8
+    config["adapter"]["placement"] = "output"
+
+    pre_path, post_path = module.export_group_geometry(
+        config=config,
+        group="C",
+        checkpoint_path=checkpoint_path,
+    )
+
+    with pre_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == [
+            "sample_id",
+            "state",
+            "class_name",
+            "pixel_count",
+            "embedding_0000",
+            "embedding_0001",
+            "embedding_0002",
+            "embedding_0003",
+            "embedding_0004",
+            "embedding_0005",
+            "embedding_0006",
+            "embedding_0007",
+        ]
+        assert list(reader) == []
+
+    with post_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == [
+            "sample_id",
+            "state",
+            "class_name",
+            "pixel_count",
+            "embedding_0000",
+            "embedding_0001",
+        ]
+        assert list(reader) == []
 
 
 def test_export_group_geometry_retries_known_windows_worker_permission_error(
@@ -529,8 +801,8 @@ def test_export_group_geometry_retries_known_windows_worker_permission_error(
     monkeypatch.setattr(module, "build_segmentation_model", lambda **kwargs: _FakeModel())
     monkeypatch.setattr(
         module,
-        "load_checkpoint",
-        lambda path, device: {"state_dict": {"module.weight": torch.tensor([1.0])}},
+        "load_model_state_dict",
+        lambda path, device: {"weight": torch.tensor([1.0])},
     )
     monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
 
@@ -543,5 +815,96 @@ def test_export_group_geometry_retries_known_windows_worker_permission_error(
     )
 
     assert loader_calls == [2, 0]
+    assert pre_path.exists()
+    assert post_path.exists()
+
+
+def test_export_group_geometry_supports_glas_dataset_contract(tmp_path, monkeypatch):
+    module = _load_low_data_geometry_module()
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+
+    calls: dict[str, object] = {}
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class _FakeGlaSDataset:
+        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
+            calls["dataset"] = {
+                "images_dir": images_dir,
+                "masks_dir": masks_dir,
+                "image_size": image_size,
+                "class_values": dict(class_values),
+                "sample_ids": sample_ids,
+            }
+            self.image_paths = [_FakePath("glas_001")]
+
+    class _FakeLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            self._batches = [
+                {
+                    "sample_id": ["glas_001"],
+                    "image": torch.zeros((1, 3, 1, 1), dtype=torch.float32),
+                    "mask": torch.tensor([[[1]]], dtype=torch.long),
+                }
+            ]
+
+        def __iter__(self):
+            return iter(self._batches)
+
+    class _FakeModel:
+        def load_state_dict(self, state_dict):
+            self.loaded_state = dict(state_dict)
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, images):
+            return SimpleNamespace(
+                bottleneck=torch.tensor([[[[1.0]], [[2.0]]]]),
+                adapted_bottleneck=torch.tensor([[[[3.0]], [[4.0]]]]),
+            )
+
+    monkeypatch.setattr(
+        module,
+        "resolve_dataset_spec",
+        lambda dataset_name: SimpleNamespace(
+            dataset_name="glas",
+            class_values={"background": 0, "gland": 1},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module,
+        "_load_dataset_class",
+        lambda spec: _FakeGlaSDataset,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "DataLoader", _FakeLoader)
+    monkeypatch.setattr(module, "build_segmentation_model", lambda **kwargs: _FakeModel())
+    monkeypatch.setattr(
+        module,
+        "load_model_state_dict",
+        lambda path, device: {"weight": torch.tensor([1.0])},
+    )
+    monkeypatch.setattr(module.torch.cuda, "is_available", lambda: False)
+
+    config = _make_valid_geometry_config(tmp_path)
+    config["data"]["dataset_name"] = "glas"
+    config["data"]["class_values"] = {"background": 0, "gland": 1}
+    config["geometry"]["include_classes"] = ["gland"]
+
+    pre_path, post_path = module.export_group_geometry(
+        config=config,
+        group="C",
+        checkpoint_path=checkpoint_path,
+    )
+
+    assert calls["dataset"]["class_values"] == {"background": 0, "gland": 1}
     assert pre_path.exists()
     assert post_path.exists()

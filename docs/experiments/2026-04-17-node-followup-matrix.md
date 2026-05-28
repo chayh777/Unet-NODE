@@ -12,8 +12,17 @@
 ## Execution notes
 - The CLI `--group` argument is authoritative and must match the table's `CLI group` column; config `adapter.type` is documentary metadata only and does not override the runner-selected group.
 - Artifact roots follow the runner convention: config `paths.artifacts_dir` sets the experiment root, and the runner writes outputs under the CLI-selected group directory.
+- Report visualizations now ingest the comparison-method roots from the existing `artifacts/low_data/group_a` plain baseline plus the output-side runs under `artifacts/low_data_output/*`, and keep those comparison methods grouped ahead of the C-series tuning rows.
 - `C-diff-lr` and `C-warmup` are reserved follow-up probes that may require additional runner support before they become runnable config-only variants.
 - `C-base-locked` has already been run externally by the project owner and is treated as the locked unstable reference; do not schedule another rerun unless the code path changes.
+
+## Comparison-method stage
+- Run the comparison-method stage before any NODE solver, initialization, or regularizer tuning work so the first branch decision is about architecture choice rather than training-detail noise.
+- Compare the existing Group A plain U-Net baseline, `Output-Conv-U-Net`, and `Output-NODE-U-Net` against `B-base` using the same low-data protocol and reporting slices as the follow-up matrix.
+- Treat this stage as the gate for whether NODE-specific tuning remains justified.
+
+> Comparison-method stage precedes any solver/regularizer tuning and any multi-seed expansion.
+> If output-side comparisons or plain U-Net already dominate the current bottleneck NODE line, stop and reassess before further tuning.
 
 ## Decision rubric
 - Keep a run if it preserves the fast early rise and improves late-epoch stability.
@@ -26,6 +35,9 @@
 ## Run table
 | Run name | Category | Hypothesis | Config file | CLI group | Code support needed | Best Dice | Best IoU | Best epoch | Final Dice | Peak-final gap | Decision | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Plain-U-Net | comparison-method | Existing Group A plain U-Net baseline checks whether adapter-side complexity is helping at all in the current low-data bottleneck | existing Group A low-data path | A | no |  |  |  |  |  |  | Reuse the existing Group A baseline artifact/config path rather than implying a separate comparison-only plain-U-Net config. |
+| Output-Conv-U-Net | comparison-method | Output-side conv adapter tests whether a lightweight output adapter captures most of the gain without NODE dynamics | configs/experiments/isic2018_low_data_output_conv_b.yaml | B | no |  |  |  |  |  |  | Run before solver or regularizer tuning; treat as the main non-NODE output-side control. |
+| Output-NODE-U-Net | comparison-method | Output-side NODE adapter tests whether NODE dynamics add value once the comparison is constrained to the output side | configs/experiments/isic2018_low_data_output_node_c.yaml | C | no |  |  |  |  |  |  | Run before multi-seed expansion; if it does not clearly beat the output-conv line, pause NODE-specific tuning. |
 | C-base-locked | reference | Current unstable NODE reference | configs/experiments/isic2018_low_data_node_c_base_locked.yaml | C | no |  |  |  |  |  | locked-reference | Already run by project owner with `--group C`; no rerun planned. |
 | C-small-step | integration | Smaller NODE step reduces overshoot | configs/experiments/isic2018_low_data_node_c_small_step.yaml | C | no |  |  |  |  |  |  | Run with `--group C`; existing config. |
 | C-zero-last | init | Zeroing the NODE vector field last layer starts from identity flow and stabilizes training | configs/experiments/isic2018_low_data_node_c_zero_last.yaml | C | yes |  |  |  |  |  |  | Run with `--group C`; primary improvement run. |

@@ -16,7 +16,10 @@ except ModuleNotFoundError:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run config-driven low-data ISIC2018 experiments (groups A/B/C)."
+        description=(
+            "Run config-driven low-data segmentation experiments "
+            "(groups A/B/C) across supported datasets."
+        )
     )
     parser.add_argument("--config", required=True, help="Path to YAML config file.")
     parser.add_argument(

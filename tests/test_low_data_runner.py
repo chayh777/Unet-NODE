@@ -136,6 +136,13 @@ _ensure_src_experiments_importable()
 from src.experiments.low_data_runner import resolve_group_adapter
 
 
+class _FactoryDatasets:
+    def __init__(self, train_dataset, val_dataset, selected_ids):
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.selected_ids = selected_ids
+
+
 def test_resolve_group_adapter_maps_groups_to_expected_types():
     assert resolve_group_adapter("A") == "none"
     assert resolve_group_adapter("B") == "conv"
@@ -210,6 +217,65 @@ def test_node_followup_configs_parse_and_use_expected_adapter_init():
         assert float(config["node"]["step_size"]) == values["step_size"]
 
 
+def test_glas_low_data_configs_parse_with_expected_dataset_name():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/glas_low_data_conv_b_base.yaml": {
+            "dataset_name": "glas",
+            "group": "B",
+            "save_best_checkpoint": False,
+        },
+        "configs/experiments/glas_low_data_node_c_base.yaml": {
+            "dataset_name": "glas",
+            "group": "C",
+            "save_best_checkpoint": False,
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        assert config["data"]["dataset_name"] == values["dataset_name"]
+        assert config["experiment"]["group"] == values["group"]
+        assert config["train"]["save_best_checkpoint"] is values["save_best_checkpoint"]
+
+
+def test_output_side_comparison_configs_parse_with_expected_settings():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/isic2018_low_data_output_conv_b.yaml": {
+            "dataset_name": "isic2018",
+            "group": "B",
+            "adapter_type": "conv",
+        },
+        "configs/experiments/isic2018_low_data_output_node_c.yaml": {
+            "dataset_name": "isic2018",
+            "group": "C",
+            "adapter_type": "node",
+        },
+        "configs/experiments/glas_low_data_output_conv_b.yaml": {
+            "dataset_name": "glas",
+            "group": "B",
+            "adapter_type": "conv",
+        },
+        "configs/experiments/glas_low_data_output_node_c.yaml": {
+            "dataset_name": "glas",
+            "group": "C",
+            "adapter_type": "node",
+        },
+    }
+
+    for path, values in expected.items():
+        config = load_config(path)
+        assert config["data"]["dataset_name"] == values["dataset_name"]
+        assert config["experiment"]["group"] == values["group"]
+        assert config["model"]["freeze_encoder"] is True
+        assert config["adapter"]["placement"] == "output"
+        assert config["adapter"]["type"] == values["adapter_type"]
+        assert config["train"]["save_best_checkpoint"] is False
+
+
 def test_load_config_raises_clear_error_for_malformed_yaml(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text("seed: [1,2\n", encoding="utf-8")
@@ -221,6 +287,68 @@ def test_load_config_raises_clear_error_for_malformed_yaml(tmp_path):
         assert False, "Expected load_config() to raise on malformed YAML"
     except ValueError as exc:
         assert "YAML" in str(exc) or "yaml" in str(exc)
+
+
+def _valid_low_data_config() -> dict[str, object]:
+    return {
+        "seed": 42,
+        "paths": {
+            "train_images_dir": "data/train/images",
+            "train_masks_dir": "data/train/labels",
+            "val_images_dir": "data/val/images",
+            "val_masks_dir": "data/val/labels",
+            "artifacts_dir": "artifacts/low_data",
+        },
+        "data": {
+            "image_size": 256,
+            "train_ratio": 0.1,
+        },
+        "train": {
+            "batch_size": 2,
+            "epochs": 3,
+            "learning_rate": 0.001,
+            "weight_decay": 0.01,
+            "early_stopping_patience": 5,
+        },
+        "model": {
+            "encoder_name": "resnet18",
+            "encoder_weights": None,
+            "in_channels": 3,
+            "num_classes": 1,
+            "bottleneck_channels": 16,
+            "freeze_encoder": True,
+        },
+        "adapter": {
+            "hidden_channels": 8,
+        },
+        "node": {
+            "steps": 4,
+            "step_size": 0.25,
+        },
+    }
+
+
+def test_resolve_adapter_placement_defaults_to_bottleneck_when_omitted():
+    from src.experiments.low_data_runner import _resolve_adapter_placement
+
+    placement = _resolve_adapter_placement(_valid_low_data_config())
+
+    assert placement == "bottleneck"
+
+
+def test_validate_low_data_config_rejects_unsupported_adapter_placement():
+    from src.experiments.low_data_runner import _validate_low_data_config
+
+    config = _valid_low_data_config()
+    config["adapter"]["placement"] = "sidecar"
+
+    try:
+        _validate_low_data_config(config)
+        assert False, "Expected invalid adapter.placement to raise ValueError"
+    except ValueError as exc:
+        assert "config.adapter.placement" in str(exc)
+        assert "bottleneck" in str(exc)
+        assert "output" in str(exc)
 
 
 def test_run_group_validates_required_config_keys(tmp_path, monkeypatch):
@@ -302,38 +430,28 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     # Stub dependencies that run_group imports by name.
     calls: dict[str, object] = {}
 
-    fake_isic = ModuleType("src.data.isic2018")
+    fake_factory = ModuleType("src.data.factory")
 
-    class _FakePath:
-        def __init__(self, stem: str) -> None:
-            self.stem = stem
+    class _FakeDataset:
+        pass
 
-    class ISIC2018Dataset:
-        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
-            self.images_dir = images_dir
-            self.masks_dir = masks_dir
-            self.image_size = image_size
-            self.class_values = class_values
-            self.sample_ids = sample_ids
-            if sample_ids is None:
-                self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
-            else:
-                self.image_paths = [_FakePath(stem) for stem in list(sample_ids)]
+    def build_low_data_datasets(config):
+        calls["dataset_name"] = config["data"].get("dataset_name", "isic2018")
+        return _FactoryDatasets(
+            train_dataset=_FakeDataset(),
+            val_dataset=_FakeDataset(),
+            selected_ids=["img2", "img3"],
+        )
 
-    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+    fake_factory.build_low_data_datasets = build_low_data_datasets
 
     fake_splits = ModuleType("src.data.splits")
-
-    def build_ratio_subset(sample_ids, ratio, seed):
-        calls["build_ratio_subset"] = {"sample_ids": list(sample_ids), "ratio": ratio, "seed": seed}
-        return ["img2", "img3"]
 
     def save_split_manifest(sample_ids, output_path):
         calls["save_split_manifest"] = {"sample_ids": list(sample_ids), "output_path": str(output_path)}
         # Runner should ensure parent dirs exist before calling this helper.
         calls["split_parent_exists"] = Path(output_path).parent.exists()
 
-    fake_splits.build_ratio_subset = build_ratio_subset
     fake_splits.save_split_manifest = save_split_manifest
 
     fake_models = ModuleType("src.models.segmentation_model")
@@ -361,13 +479,24 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
 
     fake_engine = ModuleType("src.training.engine")
 
-    def fit(model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"):
+    def fit(
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        epochs,
+        patience,
+        output_dir,
+        device="cpu",
+        save_best_checkpoint=True,
+    ):
         calls["fit"] = {
             "epochs": epochs,
             "patience": patience,
             "output_dir": str(output_dir),
             "device": device,
             "optimizer": optimizer,
+            "save_best_checkpoint": save_best_checkpoint,
         }
         # Runner should ensure output_dir exists before training starts.
         calls["output_dir_exists"] = Path(output_dir).exists()
@@ -376,7 +505,7 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     fake_engine.fit = fit
 
     # Patch import targets for run_group.
-    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
     monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
     monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
     monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
@@ -411,14 +540,11 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
     result = run_group(config_path, "B")
     assert result == "FIT_RESULT"
 
-    assert calls["build_ratio_subset"]["seed"] == 42
-    assert calls["build_ratio_subset"]["ratio"] == 0.1
-    assert calls["build_ratio_subset"]["sample_ids"] == ["img1", "img2", "img3"]
-
     expected_manifest = artifacts_dir / "splits" / "train_seed42_ratio10.csv"
     assert calls["save_split_manifest"]["output_path"] == str(expected_manifest)
     assert calls["save_split_manifest"]["sample_ids"] == ["img2", "img3"]
     assert calls["split_parent_exists"] is True
+    assert calls["dataset_name"] == "isic2018"
 
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert calls["build_segmentation_model"]["adapter_init"] == "zero_last_layer"
@@ -477,6 +603,113 @@ def test_run_group_rejects_unknown_adapter_init(tmp_path):
         assert "zero_last_layer" in str(exc)
 
 
+def test_run_group_forwards_output_adapter_placement_to_model_construction(
+    tmp_path, monkeypatch
+):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "  placement: output",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+
+    fake_factory = ModuleType("src.data.factory")
+
+    class _FakeDataset:
+        pass
+
+    fake_factory.build_low_data_datasets = lambda config: _FactoryDatasets(
+        train_dataset=_FakeDataset(),
+        val_dataset=_FakeDataset(),
+        selected_ids=["img2", "img3"],
+    )
+
+    fake_splits = ModuleType("src.data.splits")
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    def build_segmentation_model(**kwargs):
+        calls["build_segmentation_model"] = dict(kwargs)
+        return _FakeModel()
+
+    fake_models.build_segmentation_model = build_segmentation_model
+
+    fake_engine = ModuleType("src.training.engine")
+    fake_engine.fit = lambda *args, **kwargs: "FIT_RESULT"
+
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.optim, "AdamW", lambda params, lr, weight_decay: object())
+    monkeypatch.setattr(
+        torch.utils.data,
+        "DataLoader",
+        lambda dataset, batch_size, shuffle, **kwargs: object(),
+    )
+
+    from src.experiments.low_data_runner import run_group
+
+    result = run_group(config_path, "C")
+
+    assert result == "FIT_RESULT"
+    assert calls["build_segmentation_model"]["adapter_placement"] == "output"
+
+
 def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloader_permission_error(
     tmp_path, monkeypatch
 ):
@@ -532,30 +765,19 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
 
     calls: dict[str, object] = {}
 
-    fake_isic = ModuleType("src.data.isic2018")
+    fake_factory = ModuleType("src.data.factory")
 
-    class _FakePath:
-        def __init__(self, stem: str) -> None:
-            self.stem = stem
+    class _FakeDataset:
+        pass
 
-    class ISIC2018Dataset:
-        def __init__(
-            self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None
-        ):
-            self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
-
-    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+    fake_factory.build_low_data_datasets = lambda config: _FactoryDatasets(
+        train_dataset=_FakeDataset(),
+        val_dataset=_FakeDataset(),
+        selected_ids=["img2", "img3"],
+    )
 
     fake_splits = ModuleType("src.data.splits")
-
-    def build_ratio_subset(sample_ids, ratio, seed):
-        return ["img2", "img3"]
-
-    def save_split_manifest(sample_ids, output_path):
-        return None
-
-    fake_splits.build_ratio_subset = build_ratio_subset
-    fake_splits.save_split_manifest = save_split_manifest
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
 
     fake_models = ModuleType("src.models.segmentation_model")
 
@@ -604,10 +826,22 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
         boom()
 
     def fit(
-        model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        epochs,
+        patience,
+        output_dir,
+        device="cpu",
+        save_best_checkpoint=True,
     ):
         calls.setdefault("fit_calls", []).append(
-            {"train_loader": train_loader, "val_loader": val_loader}
+            {
+                "train_loader": train_loader,
+                "val_loader": val_loader,
+                "save_best_checkpoint": save_best_checkpoint,
+            }
         )
         if len(calls["fit_calls"]) == 1:
             # Simulate a DataLoader/multiprocessing-originated PermissionError.
@@ -616,7 +850,7 @@ def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloade
 
     fake_engine.fit = fit
 
-    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
     monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
     monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
     monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
@@ -700,22 +934,18 @@ def test_run_group_does_not_retry_on_unrelated_winerror5_permission_error(
 
     calls: dict[str, object] = {}
 
-    fake_isic = ModuleType("src.data.isic2018")
+    fake_factory = ModuleType("src.data.factory")
 
-    class _FakePath:
-        def __init__(self, stem: str) -> None:
-            self.stem = stem
+    class _FakeDataset:
+        pass
 
-    class ISIC2018Dataset:
-        def __init__(
-            self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None
-        ):
-            self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
-
-    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+    fake_factory.build_low_data_datasets = lambda config: _FactoryDatasets(
+        train_dataset=_FakeDataset(),
+        val_dataset=_FakeDataset(),
+        selected_ids=["img2", "img3"],
+    )
 
     fake_splits = ModuleType("src.data.splits")
-    fake_splits.build_ratio_subset = lambda sample_ids, ratio, seed: ["img2", "img3"]
     fake_splits.save_split_manifest = lambda sample_ids, output_path: None
 
     fake_models = ModuleType("src.models.segmentation_model")
@@ -756,7 +986,15 @@ def test_run_group_does_not_retry_on_unrelated_winerror5_permission_error(
         boom()
 
     def fit(
-        model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        epochs,
+        patience,
+        output_dir,
+        device="cpu",
+        save_best_checkpoint=True,
     ):
         calls.setdefault("fit_calls", []).append(1)
         # Simulate a non-DataLoader PermissionError (e.g. file write).
@@ -764,7 +1002,7 @@ def test_run_group_does_not_retry_on_unrelated_winerror5_permission_error(
 
     fake_engine.fit = fit
 
-    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
     monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
     monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
     monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
@@ -844,36 +1082,19 @@ def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error
 
     calls: dict[str, object] = {}
 
-    fake_isic = ModuleType("src.data.isic2018")
+    fake_factory = ModuleType("src.data.factory")
 
-    class _FakePath:
-        def __init__(self, stem: str) -> None:
-            self.stem = stem
+    class _FakeDataset:
+        pass
 
-    class ISIC2018Dataset:
-        def __init__(self, *, images_dir, masks_dir, image_size, class_values, sample_ids=None):
-            self.images_dir = images_dir
-            self.masks_dir = masks_dir
-            self.image_size = image_size
-            self.class_values = class_values
-            self.sample_ids = sample_ids
-            if sample_ids is None:
-                self.image_paths = [_FakePath("img1"), _FakePath("img2"), _FakePath("img3")]
-            else:
-                self.image_paths = [_FakePath(stem) for stem in list(sample_ids)]
-
-    fake_isic.ISIC2018Dataset = ISIC2018Dataset
+    fake_factory.build_low_data_datasets = lambda config: _FactoryDatasets(
+        train_dataset=_FakeDataset(),
+        val_dataset=_FakeDataset(),
+        selected_ids=["img2", "img3"],
+    )
 
     fake_splits = ModuleType("src.data.splits")
-
-    def build_ratio_subset(sample_ids, ratio, seed):
-        return ["img2", "img3"]
-
-    def save_split_manifest(sample_ids, output_path):
-        return None
-
-    fake_splits.build_ratio_subset = build_ratio_subset
-    fake_splits.save_split_manifest = save_split_manifest
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
 
     fake_models = ModuleType("src.models.segmentation_model")
 
@@ -899,13 +1120,23 @@ def test_run_group_falls_back_to_local_adamw_on_known_register_pytree_node_error
 
     fake_engine = ModuleType("src.training.engine")
 
-    def fit(model, train_loader, val_loader, optimizer, epochs, patience, output_dir, device="cpu"):
+    def fit(
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        epochs,
+        patience,
+        output_dir,
+        device="cpu",
+        save_best_checkpoint=True,
+    ):
         calls["optimizer"] = optimizer
         return "FIT_RESULT"
 
     fake_engine.fit = fit
 
-    monkeypatch.setitem(sys.modules, "src.data.isic2018", fake_isic)
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
     monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
     monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
     monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
@@ -957,3 +1188,238 @@ def test_local_adamw_step_updates_trainable_params_and_zero_grad_clears_grads():
     param.grad = torch.tensor([1.0], dtype=torch.float32)
     opt.zero_grad()
     assert param.grad is None
+
+
+def test_run_group_passes_save_best_checkpoint_flag_to_engine(tmp_path, monkeypatch):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 7",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  dataset_name: isic2018",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 3",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 5",
+                "  save_best_checkpoint: false",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "  solver: euler",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+    fake_factory = ModuleType("src.data.factory")
+
+    class _FakePath:
+        def __init__(self, stem: str) -> None:
+            self.stem = stem
+
+    class _FakeDataset:
+        def __init__(self, names):
+            self.image_paths = [_FakePath(name) for name in names]
+
+    def build_low_data_datasets(config):
+        calls["dataset_name"] = config["data"]["dataset_name"]
+        return _FactoryDatasets(
+            train_dataset=_FakeDataset(["img2", "img3"]),
+            val_dataset=_FakeDataset(["val1"]),
+            selected_ids=["img2", "img3"],
+        )
+
+    fake_factory.build_low_data_datasets = build_low_data_datasets
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    fake_models.build_segmentation_model = lambda **kwargs: _FakeModel()
+
+    fake_engine = ModuleType("src.training.engine")
+
+    def fit(
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        epochs,
+        patience,
+        output_dir,
+        device="cpu",
+        save_best_checkpoint=True,
+    ):
+        calls["fit"] = {
+            "epochs": epochs,
+            "patience": patience,
+            "save_best_checkpoint": save_best_checkpoint,
+            "output_dir": str(output_dir),
+        }
+        return None
+
+    fake_engine.fit = fit
+
+    fake_splits = ModuleType("src.data.splits")
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
+
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.optim, "AdamW", lambda params, lr, weight_decay: object())
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, batch_size, shuffle, **kwargs):
+            self.dataset = dataset
+
+    monkeypatch.setattr(torch.utils.data, "DataLoader", _FakeDataLoader)
+
+    from src.experiments.low_data_runner import run_group
+
+    run_group(config_path, "B")
+
+    assert calls["dataset_name"] == "isic2018"
+    assert calls["fit"]["save_best_checkpoint"] is False
+
+
+def test_run_group_defaults_node_solver_to_euler_when_omitted(tmp_path, monkeypatch):
+    artifacts_dir = tmp_path / "artifacts"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "seed: 42",
+                "paths:",
+                "  train_images_dir: data/train/images",
+                "  train_masks_dir: data/train/labels",
+                "  val_images_dir: data/val/images",
+                "  val_masks_dir: data/val/labels",
+                f"  artifacts_dir: {artifacts_dir.as_posix()}",
+                "data:",
+                "  image_size: 256",
+                "  train_ratio: 0.1",
+                "train:",
+                "  batch_size: 2",
+                "  epochs: 1",
+                "  learning_rate: 0.001",
+                "  weight_decay: 0.01",
+                "  early_stopping_patience: 1",
+                "model:",
+                "  encoder_name: resnet18",
+                "  encoder_weights: null",
+                "  in_channels: 3",
+                "  num_classes: 1",
+                "  bottleneck_channels: 16",
+                "  freeze_encoder: true",
+                "adapter:",
+                "  hidden_channels: 8",
+                "node:",
+                "  steps: 4",
+                "  step_size: 0.25",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    calls: dict[str, object] = {}
+
+    fake_factory = ModuleType("src.data.factory")
+
+    class _FakeDataset:
+        pass
+
+    fake_factory.build_low_data_datasets = lambda config: _FactoryDatasets(
+        train_dataset=_FakeDataset(),
+        val_dataset=_FakeDataset(),
+        selected_ids=["img2", "img3"],
+    )
+
+    fake_splits = ModuleType("src.data.splits")
+    fake_splits.save_split_manifest = lambda sample_ids, output_path: None
+
+    fake_models = ModuleType("src.models.segmentation_model")
+
+    class _FakeParam:
+        def __init__(self, requires_grad: bool) -> None:
+            self.requires_grad = requires_grad
+
+    class _FakeModel:
+        def __init__(self):
+            self._params = [_FakeParam(True)]
+
+        def parameters(self):
+            return list(self._params)
+
+        def to(self, device):
+            return self
+
+    def build_segmentation_model(**kwargs):
+        calls["build_segmentation_model"] = dict(kwargs)
+        return _FakeModel()
+
+    fake_models.build_segmentation_model = build_segmentation_model
+
+    fake_engine = ModuleType("src.training.engine")
+    fake_engine.fit = lambda *args, **kwargs: None
+
+    monkeypatch.setitem(sys.modules, "src.data.factory", fake_factory)
+    monkeypatch.setitem(sys.modules, "src.data.splits", fake_splits)
+    monkeypatch.setitem(sys.modules, "src.models.segmentation_model", fake_models)
+    monkeypatch.setitem(sys.modules, "src.training.engine", fake_engine)
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.optim, "AdamW", lambda params, lr, weight_decay: object())
+    monkeypatch.setattr(
+        torch.utils.data,
+        "DataLoader",
+        lambda dataset, batch_size, shuffle, **kwargs: object(),
+    )
+
+    from src.experiments.low_data_runner import run_group
+
+    run_group(config_path, "C")
+
+    assert calls["build_segmentation_model"]["node_solver"] == "euler"
