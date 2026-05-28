@@ -2,9 +2,30 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import ModuleType
+import sys
 
 import pandas as pd
 import pytest
+
+
+def _ensure_package(name: str, package_path: Path) -> None:
+    if name in sys.modules:
+        return
+    pkg = ModuleType(name)
+    pkg.__path__ = [str(package_path)]  # type: ignore[attr-defined]
+    sys.modules[name] = pkg
+
+
+def _ensure_src_analysis_importable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    src_dir = repo_root / "src"
+    analysis_dir = src_dir / "analysis"
+    _ensure_package("src", src_dir)
+    _ensure_package("src.analysis", analysis_dir)
+
+
+_ensure_src_analysis_importable()
 
 
 def _write_run(
@@ -56,7 +77,7 @@ def test_summarize_run_reads_best_final_and_gap(tmp_path: Path) -> None:
         ],
     )
 
-    row = summarize_run(root=root, method="Method", run="exp", seed=7)
+    row = summarize_run(root=root, method="Method", run="exp", seed=7, dataset="isic2018")
 
     assert row == {
         "method": "Method",
@@ -73,6 +94,7 @@ def test_summarize_run_reads_best_final_and_gap(tmp_path: Path) -> None:
         "avg_epoch_sec": None,
         "checkpoint_saved": True,
         "best_checkpoint": str(root / "best.pt"),
+        "dataset": "isic2018",
         "regularization_type": "none",
         "regularization_weight": 0.0,
         "root": str(root),
@@ -97,7 +119,7 @@ def test_summarize_run_carries_timing_and_checkpoint_metrics(tmp_path: Path) -> 
         ],
     )
 
-    row = summarize_run(root=root, method="Method", run="exp", seed=2)
+    row = summarize_run(root=root, method="Method", run="exp", seed=2, dataset="isic2018")
 
     assert row["duration_sec"] == 90.0
     assert row["avg_epoch_sec"] == 30.0
@@ -122,7 +144,7 @@ def test_summarize_run_preserves_regularization_metadata(tmp_path: Path) -> None
         ],
     )
 
-    row = summarize_run(root=root, method="Method", run="exp", seed=0)
+    row = summarize_run(root=root, method="Method", run="exp", seed=0, dataset="isic2018")
 
     assert row["regularization_type"] == "kinetic"
     assert row["regularization_weight"] == 0.0001
@@ -194,7 +216,7 @@ def test_build_multiseed_tables_ingests_comparison_method_runs(tmp_path: Path) -
         ],
     )
 
-    runs, summary = build_multiseed_tables(artifacts_dir)
+    runs, summary = build_multiseed_tables(artifacts_dir, dataset="isic2018")
 
     assert runs["method"].tolist() == [
         "Plain-U-Net",
@@ -210,6 +232,77 @@ def test_build_multiseed_tables_ingests_comparison_method_runs(tmp_path: Path) -
         "Output-Conv-U-Net",
         "Output-NODE-U-Net",
     ]
+    assert set(runs["dataset"]) == {"isic2018"}
+    assert set(summary["dataset"]) == {"isic2018"}
+
+
+def test_build_multiseed_tables_glas_uses_glas_roots_and_keeps_dataset_column(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "glas_low_data" / "group_a",
+        best=0.61,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.60, "val_iou": 0.45},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.61, "val_iou": 0.46},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data" / "group_b",
+        best=0.63,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.62, "val_iou": 0.47},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.63, "val_iou": 0.48},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data" / "output_conv_b_seed42" / "group_b",
+        best=0.64,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.63, "val_iou": 0.49},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.64, "val_iou": 0.50},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data" / "output_node_c_seed42" / "group_c",
+        best=0.65,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.64, "val_iou": 0.51},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.65, "val_iou": 0.52},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data_followup" / "c_zero_last_fine_integration" / "group_c",
+        best=0.67,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.66, "val_iou": 0.53},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.67, "val_iou": 0.54},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data_tuning" / "c_zero_last_kinetic" / "group_c",
+        best=0.68,
+        regularization_type="kinetic",
+        regularization_weight=0.0001,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.67, "val_iou": 0.55},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.68, "val_iou": 0.56},
+        ],
+    )
+
+    runs, summary = build_multiseed_tables(artifacts_dir, dataset="glas")
+
+    assert runs["method"].tolist() == [
+        "Plain-U-Net",
+        "B-base",
+        "Output-Conv-U-Net",
+        "Output-NODE-U-Net",
+        "C-zero-last-steps8",
+        "C-zero-last-kinetic",
+    ]
+    assert set(runs["dataset"]) == {"glas"}
+    assert set(summary["dataset"]) == {"glas"}
 
 
 def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Path) -> None:
@@ -240,7 +333,7 @@ def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Pa
         ],
     )
 
-    runs, summary = build_multiseed_tables(artifacts_dir)
+    runs, summary = build_multiseed_tables(artifacts_dir, dataset="isic2018")
 
     assert runs["duration_sec"].tolist() == [100.0, 120.0]
     assert runs["avg_epoch_sec"].tolist() == [50.0, 60.0]
@@ -305,7 +398,7 @@ def test_build_steps_ablation_table_collects_default_and_zero_last(tmp_path: Pat
         ],
     )
 
-    table = build_steps_ablation_table(artifacts_dir)
+    table = build_steps_ablation_table(artifacts_dir, dataset="isic2018")
 
     assert table[["init", "steps", "run", "best_dice"]].to_dict("records") == [
         {"init": "default", "steps": 4, "run": "c_base", "best_dice": 0.71},
@@ -477,6 +570,7 @@ def test_write_report_visualizations_writes_tables_and_figures(tmp_path: Path) -
     output_dir = write_report_visualizations(
         artifacts_dir=artifacts_dir,
         output_dir=tmp_path / "report",
+        dataset="isic2018",
     )
 
     assert output_dir == tmp_path / "report"
@@ -487,3 +581,35 @@ def test_write_report_visualizations_writes_tables_and_figures(tmp_path: Path) -
     assert (output_dir / "multiseed_final_dice.png").exists()
     assert (output_dir / "multiseed_delta_vs_b.png").exists()
     assert (output_dir / "steps_best_dice.png").exists()
+
+
+def test_write_report_visualizations_all_writes_dataset_subdirectories(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import write_report_visualizations
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data" / "group_a",
+        best=0.70,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.69, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.70, "val_iou": 0.51},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "glas_low_data" / "group_a",
+        best=0.60,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.59, "val_iou": 0.44},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.60, "val_iou": 0.45},
+        ],
+    )
+
+    output_dir = write_report_visualizations(
+        artifacts_dir=artifacts_dir,
+        output_dir=tmp_path / "report",
+        dataset="all",
+    )
+
+    assert output_dir == tmp_path / "report"
+    assert (output_dir / "isic2018" / "multiseed_summary.csv").exists()
+    assert (output_dir / "glas" / "multiseed_summary.csv").exists()

@@ -185,10 +185,11 @@ def test_plot_report_results_cli_passes_args_to_writer(
     calls: dict[str, object] = {}
     report_module = ModuleType("src.analysis.report_visualization")
 
-    def write_report_visualizations(*, artifacts_dir, output_dir):
+    def write_report_visualizations(*, artifacts_dir, output_dir, dataset):
         calls["report"] = {
             "artifacts_dir": Path(artifacts_dir),
             "output_dir": Path(output_dir),
+            "dataset": dataset,
         }
         return Path(output_dir)
 
@@ -205,8 +206,8 @@ def test_plot_report_results_cli_passes_args_to_writer(
             "plot_report_results.py",
             "--artifacts-dir",
             str(tmp_path / "artifacts"),
-            "--output-dir",
-            str(tmp_path / "figures"),
+            "--dataset",
+            "glas",
         ],
     )
 
@@ -214,7 +215,8 @@ def test_plot_report_results_cli_passes_args_to_writer(
 
     assert calls["report"] == {
         "artifacts_dir": tmp_path / "artifacts",
-        "output_dir": tmp_path / "figures",
+        "output_dir": tmp_path / "artifacts" / "report_figures" / "glas",
+        "dataset": "glas",
     }
 
 

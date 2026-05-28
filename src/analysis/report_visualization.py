@@ -27,6 +27,7 @@ def summarize_run(
     method: str,
     run: str,
     seed: int | None,
+    dataset: str,
 ) -> dict[str, Any]:
     root = Path(root)
     history_path = root / "history.csv"
@@ -61,6 +62,7 @@ def summarize_run(
         checkpoint_saved = bool(best_checkpoint)
 
     return {
+        "dataset": dataset,
         "method": method,
         "run": run,
         "seed": seed,
@@ -81,20 +83,6 @@ def summarize_run(
     }
 
 
-_MULTISEED_METHODS = {
-    "b_seed": "B-base",
-    "c_fine_integration_seed": "C-fine-steps8-default",
-    "c_zero_last_fine_integration_seed": "C-zero-last-steps8",
-    "c_zero_last_steps16_seed": "C-zero-last-steps16",
-}
-
-_MULTISEED_ORDER = [
-    "B-base",
-    "C-fine-steps8-default",
-    "C-zero-last-steps8",
-    "C-zero-last-steps16",
-]
-
 _COMPARISON_METHOD_ORDER = [
     "Plain-U-Net",
     "B-base",
@@ -107,13 +95,37 @@ _REPORT_METHOD_ORDER = [
     "C-fine-steps8-default",
     "C-zero-last-steps8",
     "C-zero-last-steps16",
+    "C-zero-last-kinetic",
+    "C-zero-last-kinetic-steps8",
+    "C-zero-last-kinetic-rk4",
 ]
 
-_COMPARISON_RUNS = [
-    ("Plain-U-Net", "low_data", None, "group_a"),
-    ("Output-Conv-U-Net", "low_data_output", "conv_b_seed*", "group_b"),
-    ("Output-NODE-U-Net", "low_data_output", "node_c_seed*", "group_c"),
-]
+_DATASET_RUN_GLOBS: dict[str, list[tuple[str, str]]] = {
+    "isic2018": [
+        ("B-base", "low_data_multiseed/b_seed*/group_b"),
+        ("C-fine-steps8-default", "low_data_multiseed/c_fine_integration_seed*/group_c"),
+        ("C-zero-last-steps8", "low_data_multiseed/c_zero_last_fine_integration_seed*/group_c"),
+        ("C-zero-last-steps16", "low_data_multiseed/c_zero_last_steps16_seed*/group_c"),
+        ("Plain-U-Net", "low_data/group_a"),
+        ("Output-Conv-U-Net", "low_data_output/conv_b_seed*/group_b"),
+        ("Output-NODE-U-Net", "low_data_output/node_c_seed*/group_c"),
+        ("C-zero-last-kinetic", "low_data_tuning/c_zero_last_kinetic/group_c"),
+        ("C-zero-last-kinetic-steps8", "low_data_tuning/c_zero_last_kinetic_steps8/group_c"),
+        ("C-zero-last-kinetic-rk4", "low_data_tuning/c_zero_last_kinetic_rk4/group_c"),
+    ],
+    "glas": [
+        ("Plain-U-Net", "glas_low_data/group_a"),
+        ("B-base", "glas_low_data/group_b"),
+        ("Output-Conv-U-Net", "glas_low_data/output_conv_b_seed*/group_b"),
+        ("Output-NODE-U-Net", "glas_low_data/output_node_c_seed*/group_c"),
+        ("C-fine-steps8-default", "glas_low_data_followup/c_fine_integration/group_c"),
+        ("C-zero-last-steps8", "glas_low_data_followup/c_zero_last_fine_integration/group_c"),
+        ("C-zero-last-steps16", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"),
+        ("C-zero-last-kinetic", "glas_low_data_tuning/c_zero_last_kinetic/group_c"),
+        ("C-zero-last-kinetic-steps8", "glas_low_data_tuning/c_zero_last_kinetic_steps8/group_c"),
+        ("C-zero-last-kinetic-rk4", "glas_low_data_tuning/c_zero_last_kinetic_rk4/group_c"),
+    ],
+}
 
 
 def _parse_seed(run_name: str) -> int | None:
@@ -124,47 +136,33 @@ def _parse_seed(run_name: str) -> int | None:
     return int(suffix) if suffix.isdigit() else None
 
 
-def _method_for_multiseed_run(run_name: str) -> str | None:
-    for prefix, method in _MULTISEED_METHODS.items():
-        if run_name.startswith(prefix):
-            return method
-    return None
+def _iter_report_runs(artifacts_dir: Path, dataset: str):
+    for method, relative_glob in _DATASET_RUN_GLOBS[dataset]:
+        for root in sorted(artifacts_dir.glob(relative_glob)):
+            yield dataset, method, root.parent.name, root
 
 
-def _iter_report_runs(artifacts_dir: Path):
-    for root in sorted((artifacts_dir / "low_data_multiseed").glob("*/group_*")):
-        run_name = root.parent.name
-        method = _method_for_multiseed_run(run_name)
-        if method is None:
-            continue
-        yield method, run_name, root
-
-    for method, relative_parent, run_pattern, group_name in _COMPARISON_RUNS:
-        if run_pattern is None:
-            root = artifacts_dir / relative_parent / group_name
-            if root.exists():
-                yield method, relative_parent, root
-            continue
-        for root in sorted((artifacts_dir / relative_parent).glob(f"{run_pattern}/{group_name}")):
-            yield method, root.parent.name, root
-
-
-def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_multiseed_tables(
+    artifacts_dir: str | Path,
+    dataset: str = "isic2018",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     artifacts_dir = Path(artifacts_dir)
     rows: list[dict[str, Any]] = []
-    for method, run_name, root in _iter_report_runs(artifacts_dir):
+    for run_dataset, method, run_name, root in _iter_report_runs(artifacts_dir, dataset):
         rows.append(
             summarize_run(
                 root=root,
                 method=method,
                 run=run_name,
                 seed=_parse_seed(run_name),
+                dataset=run_dataset,
             )
         )
 
     runs = pd.DataFrame(rows)
     if runs.empty:
         columns = [
+            "dataset",
             "method",
             "run",
             "seed",
@@ -186,11 +184,11 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
         return pd.DataFrame(columns=columns), pd.DataFrame()
 
     runs["method"] = pd.Categorical(runs["method"], categories=_REPORT_METHOD_ORDER, ordered=True)
-    runs = runs.sort_values(["method", "seed"]).reset_index(drop=True)
+    runs = runs.sort_values(["dataset", "method", "seed"]).reset_index(drop=True)
     runs["method"] = runs["method"].astype(str)
 
     summary = (
-        runs.groupby("method", observed=True)
+        runs.groupby(["dataset", "method"], observed=True)
         .agg(
             n=("seed", "count"),
             best_dice_mean=("best_dice", "mean"),
@@ -211,31 +209,49 @@ def build_multiseed_tables(artifacts_dir: str | Path) -> tuple[pd.DataFrame, pd.
         .reset_index()
     )
     summary["method"] = pd.Categorical(summary["method"], categories=_REPORT_METHOD_ORDER, ordered=True)
-    summary = summary.sort_values("method").reset_index(drop=True)
+    summary = summary.sort_values(["dataset", "method"]).reset_index(drop=True)
     summary["method"] = summary["method"].astype(str)
     return runs, summary
 
 
-_STEPS_ABLATION_RUNS = [
-    ("default", 2, "c_steps2_t1", "low_data_followup/c_steps2_t1/group_c"),
-    ("default", 4, "c_base", "low_data/group_c"),
-    ("default", 8, "c_fine_integration", "low_data_followup/c_fine_integration/group_c"),
-    ("default", 16, "c_steps16_t1", "low_data_followup/c_steps16_t1/group_c"),
-    ("zero_last", 2, "c_zero_last_steps2_t1", "low_data_followup/c_zero_last_steps2_t1/group_c"),
-    ("zero_last", 4, "c_zero_last", "low_data_followup/c_zero_last/group_c"),
-    ("zero_last", 8, "c_zero_last_fine_integration", "low_data_followup/c_zero_last_fine_integration/group_c"),
-    ("zero_last", 16, "c_zero_last_steps16_t1", "low_data_followup/c_zero_last_steps16_t1/group_c"),
-]
+_STEPS_ABLATION_RUNS_BY_DATASET: dict[str, list[tuple[str, int, str, str]]] = {
+    "isic2018": [
+        ("default", 2, "c_steps2_t1", "low_data_followup/c_steps2_t1/group_c"),
+        ("default", 4, "c_base", "low_data/group_c"),
+        ("default", 8, "c_fine_integration", "low_data_followup/c_fine_integration/group_c"),
+        ("default", 16, "c_steps16_t1", "low_data_followup/c_steps16_t1/group_c"),
+        ("zero_last", 2, "c_zero_last_steps2_t1", "low_data_followup/c_zero_last_steps2_t1/group_c"),
+        ("zero_last", 4, "c_zero_last", "low_data_followup/c_zero_last/group_c"),
+        ("zero_last", 8, "c_zero_last_fine_integration", "low_data_followup/c_zero_last_fine_integration/group_c"),
+        ("zero_last", 16, "c_zero_last_steps16_t1", "low_data_followup/c_zero_last_steps16_t1/group_c"),
+    ],
+    "glas": [
+        ("default", 4, "c_base", "glas_low_data/group_c"),
+        ("default", 8, "c_fine_integration", "glas_low_data_followup/c_fine_integration/group_c"),
+        ("zero_last", 4, "c_zero_last", "glas_low_data_followup/c_zero_last/group_c"),
+        ("zero_last", 8, "c_zero_last_fine_integration", "glas_low_data_followup/c_zero_last_fine_integration/group_c"),
+        ("zero_last", 16, "c_zero_last_steps16_t1", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"),
+    ],
+}
 
 
-def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
+def build_steps_ablation_table(
+    artifacts_dir: str | Path,
+    dataset: str = "isic2018",
+) -> pd.DataFrame:
     artifacts_dir = Path(artifacts_dir)
     rows: list[dict[str, Any]] = []
-    for init, steps, run_name, relative_root in _STEPS_ABLATION_RUNS:
+    for init, steps, run_name, relative_root in _STEPS_ABLATION_RUNS_BY_DATASET[dataset]:
         root = artifacts_dir / relative_root
         if not root.exists():
             continue
-        row = summarize_run(root=root, method=f"{init}-steps{steps}", run=run_name, seed=None)
+        row = summarize_run(
+            root=root,
+            method=f"{init}-steps{steps}",
+            run=run_name,
+            seed=None,
+            dataset=dataset,
+        )
         row["init"] = init
         row["steps"] = steps
         row["T"] = 1.0
@@ -245,6 +261,7 @@ def build_steps_ablation_table(artifacts_dir: str | Path) -> pd.DataFrame:
     if table.empty:
         return pd.DataFrame(
             columns=[
+                "dataset",
                 "init",
                 "steps",
                 "T",
@@ -335,7 +352,11 @@ def _save_delta_vs_b(runs: pd.DataFrame, output_path: Path) -> None:
     plt = _get_plotting_libs()
     wide_best = runs.pivot(index="seed", columns="method", values="best_dice")
     wide_final = runs.pivot(index="seed", columns="method", values="final_dice")
-    methods = [method for method in _MULTISEED_ORDER if method != "B-base" and method in wide_best.columns]
+    methods = [
+        method
+        for method in _REPORT_METHOD_ORDER
+        if method != "B-base" and method in wide_best.columns and method.startswith("C-")
+    ]
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True)
     for method in methods:
@@ -461,13 +482,29 @@ def write_report_visualizations(
     *,
     artifacts_dir: str | Path = "artifacts",
     output_dir: str | Path = "artifacts/report_figures",
+    dataset: str = "isic2018",
 ) -> Path:
     artifacts_dir = Path(artifacts_dir)
     output_dir = Path(output_dir)
+
+    if dataset == "all":
+        output_dir.mkdir(parents=True, exist_ok=True)
+        write_report_visualizations(
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir / "isic2018",
+            dataset="isic2018",
+        )
+        write_report_visualizations(
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir / "glas",
+            dataset="glas",
+        )
+        return output_dir
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    multiseed_runs, multiseed_summary = build_multiseed_tables(artifacts_dir)
-    steps_table = build_steps_ablation_table(artifacts_dir)
+    multiseed_runs, multiseed_summary = build_multiseed_tables(artifacts_dir, dataset=dataset)
+    steps_table = build_steps_ablation_table(artifacts_dir, dataset=dataset)
 
     multiseed_runs.to_csv(output_dir / "multiseed_summary.csv", index=False)
     multiseed_summary.to_csv(output_dir / "multiseed_method_summary.csv", index=False)
