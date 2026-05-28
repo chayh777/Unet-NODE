@@ -59,6 +59,7 @@ def test_output_side_conv_adapter_preserves_shapes_and_output_contract():
         freeze_encoder=True,
         node_steps=4,
         node_step_size=0.25,
+        architecture="legacy_no_skip",
     )
     x = torch.randn(2, 3, 64, 64)
 
@@ -99,6 +100,7 @@ def test_output_side_node_adapter_runs_forward_and_preserves_output_contract():
         freeze_encoder=True,
         node_steps=2,
         node_step_size=0.25,
+        architecture="legacy_no_skip",
     )
     x = torch.randn(2, 3, 64, 64)
 
@@ -180,3 +182,52 @@ def test_segmentation_model_non_node_paths_do_not_emit_node_diagnostics():
     output = model(x)
 
     assert output.node_diagnostics is None
+
+
+def test_standard_unet_plain_path_restores_input_resolution_and_emits_skip_aware_decoder_output():
+    model = build_segmentation_model(
+        encoder_name="resnet18",
+        encoder_weights=None,
+        in_channels=3,
+        num_classes=1,
+        adapter_type="none",
+        adapter_placement="bottleneck",
+        bottleneck_channels=64,
+        adapter_hidden_channels=32,
+        freeze_encoder=True,
+        node_steps=4,
+        node_step_size=0.25,
+        architecture="standard_unet",
+    )
+    x = torch.randn(2, 3, 64, 64)
+
+    output = model(x)
+
+    assert output.logits.shape == (2, 1, 64, 64)
+    assert output.bottleneck.shape == (2, 64, 4, 4)
+    assert output.adapted_bottleneck.shape == output.bottleneck.shape
+    assert output.output_adapter_activation is None
+
+
+def test_standard_unet_output_side_adapter_attaches_after_skip_decoder():
+    model = build_segmentation_model(
+        encoder_name="resnet18",
+        encoder_weights=None,
+        in_channels=3,
+        num_classes=2,
+        adapter_type="conv",
+        adapter_placement="output",
+        bottleneck_channels=64,
+        adapter_hidden_channels=32,
+        freeze_encoder=True,
+        node_steps=4,
+        node_step_size=0.25,
+        architecture="standard_unet",
+    )
+    x = torch.randn(2, 3, 64, 64)
+
+    output = model(x)
+
+    assert output.logits.shape == (2, 2, 64, 64)
+    assert output.output_adapter_activation is not None
+    assert output.output_adapter_activation.shape[-2:] == (32, 32)

@@ -232,6 +232,19 @@ def _resolve_adapter_init(config: dict[str, Any]) -> str:
     return str(value)
 
 
+def _resolve_model_architecture(config: dict[str, Any]) -> str:
+    model = config.get("model", {})
+    if not isinstance(model, dict):
+        return "standard_unet"
+    value = model.get("architecture", "standard_unet")
+    if value not in {"standard_unet", "legacy_no_skip"}:
+        raise ValueError(
+            "config.model.architecture must be one of ['standard_unet', 'legacy_no_skip']; "
+            f"got {value!r}."
+        )
+    return str(value)
+
+
 def _resolve_regularization_config(config: dict[str, Any]) -> dict[str, Any]:
     regularization = config.get("regularization", {})
     if regularization is None:
@@ -344,6 +357,7 @@ def run_group(config_path: str | Path, group: str):
         node_solver=str(config["node"].get("solver", "euler")),
         adapter_placement=adapter_placement,
         adapter_init=adapter_init,
+        architecture=_resolve_model_architecture(config),
     )
 
     trainable_params = [

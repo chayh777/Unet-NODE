@@ -8,10 +8,12 @@ import torch.nn.functional as F
 
 from .adapters import AdapterInit, ConvBottleneckAdapter, IdentityAdapter
 from .node_adapter import NODEAdapter
+from .unet_decoder import StandardUNetDecoder
 
 
 AdapterType = Literal["none", "conv", "node"]
 AdapterPlacement = Literal["bottleneck", "output"]
+ModelArchitecture = Literal["legacy_no_skip", "standard_unet"]
 
 
 class SegmentationModelOutput(NamedTuple):
@@ -135,6 +137,7 @@ class SegmentationModel(nn.Module):
         adapter_placement: AdapterPlacement = "bottleneck",
         node_solver: str = "euler",
         adapter_init: AdapterInit = "default",
+        architecture: ModelArchitecture = "standard_unet",
     ) -> None:
         super().__init__()
         allowed_weights = {"imagenet", None}
@@ -148,6 +151,12 @@ class SegmentationModel(nn.Module):
                 "adapter_placement must be one of "
                 f"{allowed_adapter_placements}; got {adapter_placement}"
             )
+        allowed_architectures = {"legacy_no_skip", "standard_unet"}
+        if architecture not in allowed_architectures:
+            raise ValueError(
+                f"architecture must be one of {allowed_architectures}; got {architecture}"
+            )
+        self.architecture = architecture
 
         try:
             encoder, encoder_channels = _build_timm_encoder(
@@ -186,7 +195,9 @@ class SegmentationModel(nn.Module):
             self.adapter = IdentityAdapter()
             self.output_adapter = self._build_adapter(
                 adapter_type=adapter_type,
-                channels=mid2,
+                channels=encoder_channels[0]
+                if architecture == "standard_unet"
+                else mid2,
                 hidden_channels=adapter_hidden_channels,
                 node_steps=node_steps,
                 node_step_size=node_step_size,
@@ -194,13 +205,22 @@ class SegmentationModel(nn.Module):
                 adapter_init=adapter_init,
             )
 
-        self.decoder = nn.Sequential(
-            nn.Conv2d(bottleneck_channels, mid1, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid1, mid2, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.head = nn.Conv2d(mid2, num_classes, kernel_size=1)
+        if architecture == "legacy_no_skip":
+            decoder_output_channels = mid2
+            self.decoder = nn.Sequential(
+                nn.Conv2d(bottleneck_channels, mid1, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(mid1, mid2, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            decoder_output_channels = encoder_channels[0]
+            self.decoder = StandardUNetDecoder(
+                encoder_channels=encoder_channels,
+                bottleneck_channels=bottleneck_channels,
+                output_channels=decoder_output_channels,
+            )
+        self.head = nn.Conv2d(decoder_output_channels, num_classes, kernel_size=1)
 
         if freeze_encoder:
             for p in self.encoder.parameters():
@@ -241,7 +261,13 @@ class SegmentationModel(nn.Module):
         bottleneck = self.bottleneck_proj(features[-1])
         adapted_bottleneck = self.adapter(bottleneck)
 
-        decoded = self.decoder(adapted_bottleneck)
+        if self.architecture == "legacy_no_skip":
+            decoded = self.decoder(adapted_bottleneck)
+        else:
+            decoded = self.decoder(
+                adapted_bottleneck,
+                skip_features=list(features[:-1])[::-1],
+            )
         decoded = self.output_adapter(decoded)
         output_adapter_activation = (
             decoded if not isinstance(self.output_adapter, IdentityAdapter) else None

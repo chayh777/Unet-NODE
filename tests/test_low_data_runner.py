@@ -493,6 +493,25 @@ def test_resolve_adapter_placement_defaults_to_bottleneck_when_omitted():
     assert placement == "bottleneck"
 
 
+def test_resolve_model_architecture_defaults_to_standard_unet():
+    from src.experiments.low_data_runner import _resolve_model_architecture
+
+    architecture = _resolve_model_architecture({})
+
+    assert architecture == "standard_unet"
+
+
+def test_resolve_model_architecture_rejects_unknown_value():
+    from src.experiments.low_data_runner import _resolve_model_architecture
+
+    try:
+        _resolve_model_architecture({"model": {"architecture": "weird"}})
+        assert False, "Expected invalid model.architecture to raise ValueError"
+    except ValueError as exc:
+        assert "config.model.architecture" in str(exc)
+        assert "standard_unet" in str(exc)
+
+
 def test_validate_low_data_config_rejects_unsupported_adapter_placement():
     from src.experiments.low_data_runner import _validate_low_data_config
 
@@ -707,6 +726,7 @@ def test_run_group_writes_split_manifest_and_uses_group_adapter(tmp_path, monkey
 
     assert calls["build_segmentation_model"]["adapter_type"] == "conv"
     assert calls["build_segmentation_model"]["adapter_init"] == "zero_last_layer"
+    assert calls["build_segmentation_model"]["architecture"] == "standard_unet"
     assert Path(calls["fit"]["output_dir"]).name == "group_b"
     assert calls["output_dir_exists"] is True
 
@@ -867,6 +887,17 @@ def test_run_group_forwards_output_adapter_placement_to_model_construction(
 
     assert result == "FIT_RESULT"
     assert calls["build_segmentation_model"]["adapter_placement"] == "output"
+
+
+def test_standard_unet_configs_parse_with_expected_architecture():
+    from src.experiments.low_data_runner import load_config
+
+    for path in [
+        "configs/experiments/isic2018_low_data_node_standard_unet.yaml",
+        "configs/experiments/glas_low_data_node_standard_unet.yaml",
+    ]:
+        config = load_config(path)
+        assert config["model"]["architecture"] == "standard_unet"
 
 
 def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloader_permission_error(
