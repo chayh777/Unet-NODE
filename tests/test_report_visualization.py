@@ -365,6 +365,37 @@ def test_build_multiseed_tables_prefers_standard_unet_roots_over_legacy_roots(tm
     assert summary["best_dice_mean"].tolist() == [0.8, 0.82, 0.81]
 
 
+def test_build_multiseed_tables_prefers_standard_unet_multiseed_over_single_runs(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "isic2018_standard_unet" / "group_b",
+        best=0.70,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.69, "val_iou": 0.50},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.70, "val_iou": 0.51},
+        ],
+    )
+    for seed, best in [(0, 0.81), (1, 0.82), (2, 0.83)]:
+        _write_run(
+            artifacts_dir / "isic2018_standard_unet_multiseed" / f"b_seed{seed}" / "group_b",
+            best=best,
+            rows=[
+                {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": best - 0.01, "val_iou": 0.60},
+                {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": best, "val_iou": 0.61},
+            ],
+        )
+
+    runs, summary = build_multiseed_tables(artifacts_dir, dataset="isic2018")
+
+    assert runs["run"].tolist() == ["b_seed0", "b_seed1", "b_seed2"]
+    assert runs["seed"].tolist() == [0, 1, 2]
+    row = summary.loc[summary["method"] == "B-base"].iloc[0]
+    assert row["n"] == 3
+    assert row["best_dice_mean"] == 0.82
+
+
 def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Path) -> None:
     from src.analysis.report_visualization import build_multiseed_tables
 
