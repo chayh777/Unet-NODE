@@ -900,6 +900,24 @@ def test_standard_unet_configs_parse_with_expected_architecture():
         assert config["model"]["architecture"] == "standard_unet"
 
 
+def test_standard_unet_split_configs_parse_with_isolated_artifact_roots():
+    from src.experiments.low_data_runner import load_config
+
+    expected = {
+        "configs/experiments/isic2018_low_data_output_conv_b_standard_unet.yaml": "artifacts/isic2018_standard_unet/output_conv_b_seed42",
+        "configs/experiments/isic2018_low_data_node_c_zero_last_fine_integration_standard_unet.yaml": "artifacts/isic2018_standard_unet_followup/c_zero_last_fine_integration",
+        "configs/experiments/isic2018_low_data_node_c_zero_last_kinetic_standard_unet.yaml": "artifacts/isic2018_standard_unet_tuning/c_zero_last_kinetic",
+        "configs/experiments/glas_low_data_output_conv_b_standard_unet.yaml": "artifacts/glas_standard_unet/output_conv_b_seed42",
+        "configs/experiments/glas_low_data_node_c_zero_last_fine_integration_standard_unet.yaml": "artifacts/glas_standard_unet_followup/c_zero_last_fine_integration",
+        "configs/experiments/glas_low_data_node_c_zero_last_kinetic_standard_unet.yaml": "artifacts/glas_standard_unet_tuning/c_zero_last_kinetic",
+    }
+
+    for path, artifacts_dir in expected.items():
+        config = load_config(path)
+        assert config["model"]["architecture"] == "standard_unet"
+        assert config["paths"]["artifacts_dir"] == artifacts_dir
+
+
 def test_run_group_retries_once_with_num_workers_zero_on_known_windows_dataloader_permission_error(
     tmp_path, monkeypatch
 ):

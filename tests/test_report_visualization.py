@@ -305,6 +305,49 @@ def test_build_multiseed_tables_glas_uses_glas_roots_and_keeps_dataset_column(tm
     assert set(summary["dataset"]) == {"glas"}
 
 
+def test_build_multiseed_tables_prefers_standard_unet_roots_over_legacy_roots(tmp_path: Path) -> None:
+    from src.analysis.report_visualization import build_multiseed_tables
+
+    artifacts_dir = tmp_path / "artifacts"
+    _write_run(
+        artifacts_dir / "low_data" / "group_a",
+        best=0.60,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.59, "val_iou": 0.40},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.60, "val_iou": 0.41},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "isic2018_standard_unet" / "group_a",
+        best=0.80,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.79, "val_iou": 0.70},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.80, "val_iou": 0.71},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "low_data_output" / "conv_b_seed42" / "group_b",
+        best=0.61,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.60, "val_iou": 0.42},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.61, "val_iou": 0.43},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "isic2018_standard_unet" / "output_conv_b_seed42" / "group_b",
+        best=0.81,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.80, "val_iou": 0.72},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.81, "val_iou": 0.73},
+        ],
+    )
+
+    runs, summary = build_multiseed_tables(artifacts_dir, dataset="isic2018")
+
+    assert runs["best_dice"].tolist() == [0.8, 0.81]
+    assert summary["best_dice_mean"].tolist() == [0.8, 0.81]
+
+
 def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Path) -> None:
     from src.analysis.report_visualization import build_multiseed_tables
 

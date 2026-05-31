@@ -1,0 +1,53 @@
+seed: 42
+experiment:
+  name: glas_standard_unet_output_conv_b
+  group: B
+paths:
+  train_images_dir: data/glas/train/images
+  train_masks_dir: data/glas/train/masks
+  val_images_dir: data/glas/val/images
+  val_masks_dir: data/glas/val/masks
+  artifacts_dir: artifacts/glas_standard_unet/output_conv_b_seed42
+data:
+  dataset_name: glas
+  image_size: 256
+  train_ratio: 1.0
+  num_workers: 0
+  pin_memory: false
+model:
+  architecture: standard_unet
+  encoder_name: resnet34
+  encoder_weights: imagenet
+  in_channels: 3
+  num_classes: 1
+  bottleneck_channels: 512
+  freeze_encoder: true
+adapter:
+  placement: output
+  type: conv
+  hidden_channels: 512
+  init: default
+node:
+  solver: euler
+  steps: 4
+  step_size: 0.25
+train:
+  batch_size: 8
+  epochs: 50
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  early_stopping_patience: 8
+  save_best_checkpoint: false
+geometry:
+  include_classes:
+    - background
+    - gland
+  min_mask_pixels: 1
+geometry_plot:
+  pca_components: 8
+  umap_neighbors: 15
+  umap_min_dist: 0.1
+  random_state: 42
+  alpha: 0.7
+  point_size: 18
+  dpi: 150

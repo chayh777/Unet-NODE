@@ -100,30 +100,30 @@ _REPORT_METHOD_ORDER = [
     "C-zero-last-kinetic-rk4",
 ]
 
-_DATASET_RUN_GLOBS: dict[str, list[tuple[str, str]]] = {
+_DATASET_RUN_GLOBS: dict[str, list[tuple[str, list[str]]]] = {
     "isic2018": [
-        ("B-base", "low_data_multiseed/b_seed*/group_b"),
-        ("C-fine-steps8-default", "low_data_multiseed/c_fine_integration_seed*/group_c"),
-        ("C-zero-last-steps8", "low_data_multiseed/c_zero_last_fine_integration_seed*/group_c"),
-        ("C-zero-last-steps16", "low_data_multiseed/c_zero_last_steps16_seed*/group_c"),
-        ("Plain-U-Net", "low_data/group_a"),
-        ("Output-Conv-U-Net", "low_data_output/conv_b_seed*/group_b"),
-        ("Output-NODE-U-Net", "low_data_output/node_c_seed*/group_c"),
-        ("C-zero-last-kinetic", "low_data_tuning/c_zero_last_kinetic/group_c"),
-        ("C-zero-last-kinetic-steps8", "low_data_tuning/c_zero_last_kinetic_steps8/group_c"),
-        ("C-zero-last-kinetic-rk4", "low_data_tuning/c_zero_last_kinetic_rk4/group_c"),
+        ("B-base", ["low_data_multiseed/b_seed*/group_b", "isic2018_standard_unet/group_b"]),
+        ("C-fine-steps8-default", ["low_data_multiseed/c_fine_integration_seed*/group_c", "isic2018_standard_unet_followup/c_fine_integration/group_c"]),
+        ("C-zero-last-steps8", ["low_data_multiseed/c_zero_last_fine_integration_seed*/group_c", "isic2018_standard_unet_followup/c_zero_last_fine_integration/group_c"]),
+        ("C-zero-last-steps16", ["low_data_multiseed/c_zero_last_steps16_seed*/group_c", "isic2018_standard_unet_followup/c_zero_last_steps16_t1/group_c"]),
+        ("Plain-U-Net", ["isic2018_standard_unet/group_a", "low_data/group_a"]),
+        ("Output-Conv-U-Net", ["isic2018_standard_unet/output_conv_b_seed*/group_b", "low_data_output/conv_b_seed*/group_b"]),
+        ("Output-NODE-U-Net", ["isic2018_standard_unet/output_node_c_seed*/group_c", "low_data_output/node_c_seed*/group_c"]),
+        ("C-zero-last-kinetic", ["isic2018_standard_unet_tuning/c_zero_last_kinetic/group_c", "low_data_tuning/c_zero_last_kinetic/group_c"]),
+        ("C-zero-last-kinetic-steps8", ["isic2018_standard_unet_tuning/c_zero_last_kinetic_steps8/group_c", "low_data_tuning/c_zero_last_kinetic_steps8/group_c"]),
+        ("C-zero-last-kinetic-rk4", ["isic2018_standard_unet_tuning/c_zero_last_kinetic_rk4/group_c", "low_data_tuning/c_zero_last_kinetic_rk4/group_c"]),
     ],
     "glas": [
-        ("Plain-U-Net", "glas_low_data/group_a"),
-        ("B-base", "glas_low_data/group_b"),
-        ("Output-Conv-U-Net", "glas_low_data/output_conv_b_seed*/group_b"),
-        ("Output-NODE-U-Net", "glas_low_data/output_node_c_seed*/group_c"),
-        ("C-fine-steps8-default", "glas_low_data_followup/c_fine_integration/group_c"),
-        ("C-zero-last-steps8", "glas_low_data_followup/c_zero_last_fine_integration/group_c"),
-        ("C-zero-last-steps16", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"),
-        ("C-zero-last-kinetic", "glas_low_data_tuning/c_zero_last_kinetic/group_c"),
-        ("C-zero-last-kinetic-steps8", "glas_low_data_tuning/c_zero_last_kinetic_steps8/group_c"),
-        ("C-zero-last-kinetic-rk4", "glas_low_data_tuning/c_zero_last_kinetic_rk4/group_c"),
+        ("Plain-U-Net", ["glas_standard_unet/group_a", "glas_low_data/group_a"]),
+        ("B-base", ["glas_standard_unet/group_b", "glas_low_data/group_b"]),
+        ("Output-Conv-U-Net", ["glas_standard_unet/output_conv_b_seed*/group_b", "glas_low_data/output_conv_b_seed*/group_b"]),
+        ("Output-NODE-U-Net", ["glas_standard_unet/output_node_c_seed*/group_c", "glas_low_data/output_node_c_seed*/group_c"]),
+        ("C-fine-steps8-default", ["glas_standard_unet_followup/c_fine_integration/group_c", "glas_low_data_followup/c_fine_integration/group_c"]),
+        ("C-zero-last-steps8", ["glas_standard_unet_followup/c_zero_last_fine_integration/group_c", "glas_low_data_followup/c_zero_last_fine_integration/group_c"]),
+        ("C-zero-last-steps16", ["glas_standard_unet_followup/c_zero_last_steps16_t1/group_c", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"]),
+        ("C-zero-last-kinetic", ["glas_standard_unet_tuning/c_zero_last_kinetic/group_c", "glas_low_data_tuning/c_zero_last_kinetic/group_c"]),
+        ("C-zero-last-kinetic-steps8", ["glas_standard_unet_tuning/c_zero_last_kinetic_steps8/group_c", "glas_low_data_tuning/c_zero_last_kinetic_steps8/group_c"]),
+        ("C-zero-last-kinetic-rk4", ["glas_standard_unet_tuning/c_zero_last_kinetic_rk4/group_c", "glas_low_data_tuning/c_zero_last_kinetic_rk4/group_c"]),
     ],
 }
 
@@ -137,8 +137,13 @@ def _parse_seed(run_name: str) -> int | None:
 
 
 def _iter_report_runs(artifacts_dir: Path, dataset: str):
-    for method, relative_glob in _DATASET_RUN_GLOBS[dataset]:
-        for root in sorted(artifacts_dir.glob(relative_glob)):
+    for method, relative_globs in _DATASET_RUN_GLOBS[dataset]:
+        matched_roots: list[Path] = []
+        for relative_glob in relative_globs:
+            matched_roots = sorted(artifacts_dir.glob(relative_glob))
+            if matched_roots:
+                break
+        for root in matched_roots:
             yield dataset, method, root.parent.name, root
 
 
@@ -214,23 +219,23 @@ def build_multiseed_tables(
     return runs, summary
 
 
-_STEPS_ABLATION_RUNS_BY_DATASET: dict[str, list[tuple[str, int, str, str]]] = {
+_STEPS_ABLATION_RUNS_BY_DATASET: dict[str, list[tuple[str, int, str, list[str]]]] = {
     "isic2018": [
-        ("default", 2, "c_steps2_t1", "low_data_followup/c_steps2_t1/group_c"),
-        ("default", 4, "c_base", "low_data/group_c"),
-        ("default", 8, "c_fine_integration", "low_data_followup/c_fine_integration/group_c"),
-        ("default", 16, "c_steps16_t1", "low_data_followup/c_steps16_t1/group_c"),
-        ("zero_last", 2, "c_zero_last_steps2_t1", "low_data_followup/c_zero_last_steps2_t1/group_c"),
-        ("zero_last", 4, "c_zero_last", "low_data_followup/c_zero_last/group_c"),
-        ("zero_last", 8, "c_zero_last_fine_integration", "low_data_followup/c_zero_last_fine_integration/group_c"),
-        ("zero_last", 16, "c_zero_last_steps16_t1", "low_data_followup/c_zero_last_steps16_t1/group_c"),
+        ("default", 2, "c_steps2_t1", ["low_data_followup/c_steps2_t1/group_c"]),
+        ("default", 4, "c_base", ["isic2018_standard_unet/group_c", "low_data/group_c"]),
+        ("default", 8, "c_fine_integration", ["isic2018_standard_unet_followup/c_fine_integration/group_c", "low_data_followup/c_fine_integration/group_c"]),
+        ("default", 16, "c_steps16_t1", ["low_data_followup/c_steps16_t1/group_c"]),
+        ("zero_last", 2, "c_zero_last_steps2_t1", ["low_data_followup/c_zero_last_steps2_t1/group_c"]),
+        ("zero_last", 4, "c_zero_last", ["low_data_followup/c_zero_last/group_c"]),
+        ("zero_last", 8, "c_zero_last_fine_integration", ["isic2018_standard_unet_followup/c_zero_last_fine_integration/group_c", "low_data_followup/c_zero_last_fine_integration/group_c"]),
+        ("zero_last", 16, "c_zero_last_steps16_t1", ["isic2018_standard_unet_followup/c_zero_last_steps16_t1/group_c", "low_data_followup/c_zero_last_steps16_t1/group_c"]),
     ],
     "glas": [
-        ("default", 4, "c_base", "glas_low_data/group_c"),
-        ("default", 8, "c_fine_integration", "glas_low_data_followup/c_fine_integration/group_c"),
-        ("zero_last", 4, "c_zero_last", "glas_low_data_followup/c_zero_last/group_c"),
-        ("zero_last", 8, "c_zero_last_fine_integration", "glas_low_data_followup/c_zero_last_fine_integration/group_c"),
-        ("zero_last", 16, "c_zero_last_steps16_t1", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"),
+        ("default", 4, "c_base", ["glas_standard_unet/group_c", "glas_low_data/group_c"]),
+        ("default", 8, "c_fine_integration", ["glas_standard_unet_followup/c_fine_integration/group_c", "glas_low_data_followup/c_fine_integration/group_c"]),
+        ("zero_last", 4, "c_zero_last", ["glas_low_data_followup/c_zero_last/group_c"]),
+        ("zero_last", 8, "c_zero_last_fine_integration", ["glas_standard_unet_followup/c_zero_last_fine_integration/group_c", "glas_low_data_followup/c_zero_last_fine_integration/group_c"]),
+        ("zero_last", 16, "c_zero_last_steps16_t1", ["glas_standard_unet_followup/c_zero_last_steps16_t1/group_c", "glas_low_data_followup/c_zero_last_steps16_t1/group_c"]),
     ],
 }
 
@@ -241,9 +246,14 @@ def build_steps_ablation_table(
 ) -> pd.DataFrame:
     artifacts_dir = Path(artifacts_dir)
     rows: list[dict[str, Any]] = []
-    for init, steps, run_name, relative_root in _STEPS_ABLATION_RUNS_BY_DATASET[dataset]:
-        root = artifacts_dir / relative_root
-        if not root.exists():
+    for init, steps, run_name, relative_roots in _STEPS_ABLATION_RUNS_BY_DATASET[dataset]:
+        root = None
+        for relative_root in relative_roots:
+            candidate = artifacts_dir / relative_root
+            if candidate.exists():
+                root = candidate
+                break
+        if root is None:
             continue
         row = summarize_run(
             root=root,
