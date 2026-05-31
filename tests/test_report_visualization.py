@@ -232,6 +232,7 @@ def test_build_multiseed_tables_ingests_comparison_method_runs(tmp_path: Path) -
         "Output-Conv-U-Net",
         "Output-NODE-U-Net",
     ]
+    assert summary["n"].tolist() == [1, 1, 1, 1]
     assert set(runs["dataset"]) == {"isic2018"}
     assert set(summary["dataset"]) == {"isic2018"}
 
@@ -334,6 +335,22 @@ def test_build_multiseed_tables_prefers_standard_unet_roots_over_legacy_roots(tm
         ],
     )
     _write_run(
+        artifacts_dir / "low_data_multiseed" / "b_seed0" / "group_b",
+        best=0.62,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.61, "val_iou": 0.44},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.62, "val_iou": 0.45},
+        ],
+    )
+    _write_run(
+        artifacts_dir / "isic2018_standard_unet" / "group_b",
+        best=0.82,
+        rows=[
+            {"epoch": 1, "train_loss": 1.0, "val_loss": 0.9, "val_dice": 0.81, "val_iou": 0.74},
+            {"epoch": 2, "train_loss": 0.9, "val_loss": 0.8, "val_dice": 0.82, "val_iou": 0.75},
+        ],
+    )
+    _write_run(
         artifacts_dir / "isic2018_standard_unet" / "output_conv_b_seed42" / "group_b",
         best=0.81,
         rows=[
@@ -344,8 +361,8 @@ def test_build_multiseed_tables_prefers_standard_unet_roots_over_legacy_roots(tm
 
     runs, summary = build_multiseed_tables(artifacts_dir, dataset="isic2018")
 
-    assert runs["best_dice"].tolist() == [0.8, 0.81]
-    assert summary["best_dice_mean"].tolist() == [0.8, 0.81]
+    assert runs["best_dice"].tolist() == [0.8, 0.82, 0.81]
+    assert summary["best_dice_mean"].tolist() == [0.8, 0.82, 0.81]
 
 
 def test_build_multiseed_tables_carries_timing_summary_when_present(tmp_path: Path) -> None:

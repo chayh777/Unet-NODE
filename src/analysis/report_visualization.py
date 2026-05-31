@@ -102,10 +102,10 @@ _REPORT_METHOD_ORDER = [
 
 _DATASET_RUN_GLOBS: dict[str, list[tuple[str, list[str]]]] = {
     "isic2018": [
-        ("B-base", ["low_data_multiseed/b_seed*/group_b", "isic2018_standard_unet/group_b"]),
-        ("C-fine-steps8-default", ["low_data_multiseed/c_fine_integration_seed*/group_c", "isic2018_standard_unet_followup/c_fine_integration/group_c"]),
-        ("C-zero-last-steps8", ["low_data_multiseed/c_zero_last_fine_integration_seed*/group_c", "isic2018_standard_unet_followup/c_zero_last_fine_integration/group_c"]),
-        ("C-zero-last-steps16", ["low_data_multiseed/c_zero_last_steps16_seed*/group_c", "isic2018_standard_unet_followup/c_zero_last_steps16_t1/group_c"]),
+        ("B-base", ["isic2018_standard_unet/group_b", "low_data_multiseed/b_seed*/group_b"]),
+        ("C-fine-steps8-default", ["isic2018_standard_unet_followup/c_fine_integration/group_c", "low_data_multiseed/c_fine_integration_seed*/group_c"]),
+        ("C-zero-last-steps8", ["isic2018_standard_unet_followup/c_zero_last_fine_integration/group_c", "low_data_multiseed/c_zero_last_fine_integration_seed*/group_c"]),
+        ("C-zero-last-steps16", ["isic2018_standard_unet_followup/c_zero_last_steps16_t1/group_c", "low_data_multiseed/c_zero_last_steps16_seed*/group_c"]),
         ("Plain-U-Net", ["isic2018_standard_unet/group_a", "low_data/group_a"]),
         ("Output-Conv-U-Net", ["isic2018_standard_unet/output_conv_b_seed*/group_b", "low_data_output/conv_b_seed*/group_b"]),
         ("Output-NODE-U-Net", ["isic2018_standard_unet/output_node_c_seed*/group_c", "low_data_output/node_c_seed*/group_c"]),
@@ -195,7 +195,7 @@ def build_multiseed_tables(
     summary = (
         runs.groupby(["dataset", "method"], observed=True)
         .agg(
-            n=("seed", "count"),
+            n=("run", "count"),
             best_dice_mean=("best_dice", "mean"),
             best_dice_std=("best_dice", "std"),
             final_dice_mean=("final_dice", "mean"),
